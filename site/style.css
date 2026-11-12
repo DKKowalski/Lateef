@@ -224,6 +224,14 @@ footer{border-top:1px solid var(--line)}
 .downloads li:first-child{border-top:0}
 .downloads small{display:block;font-size:14px;color:var(--muted)}
 .downloads a{flex:none;font-weight:500}
+.tabs{margin:14px 0 0}
+.tabs [role=tablist]{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px}
+.tabs [role=tab]{border:1px solid var(--line);background:var(--card);border-radius:99px;padding:6px 14px;font-size:14px;font-weight:500}
+.tabs [role=tab]:hover{border-color:var(--ink)}
+.tabs [role=tab][aria-selected=true]{background:var(--ink);border-color:var(--ink);color:#fff}
+.tabs h3{font-size:17px;font-weight:550;margin:18px 0 0}
+.tabs-ready h3{display:none}
+.tabs [role=tabpanel] p{font-size:15px;color:var(--muted);margin:0}
 .doc .verify{font-size:15px;color:var(--muted)}
 
 /* Narrower layouts */
