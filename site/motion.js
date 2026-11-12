@@ -1,5 +1,5 @@
 // Original project implementation. Consult MOTION_GUIDE.md before changing timing.
-// The course is a learning reference, not a runtime dependency or copied asset source.
+// Original implementation of the landing-page demonstration timeline; it has no runtime dependencies.
 (function(){
 const {clamp,between,spring,stepSpring,cubicPoint}=globalThis.LateefMotionMath;
 const reduce=matchMedia('(prefers-reduced-motion: reduce)');

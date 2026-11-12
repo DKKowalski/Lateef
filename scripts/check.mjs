@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import assert from 'node:assert/strict';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -14,6 +15,27 @@ const all = await files(root);
 for (const name of ['index.html', 'install.html', 'privacy.html', 'security.html', '.nojekyll']) {
   assert.ok((await stat(resolve(root, name))).isFile(), `Missing ${name}`);
 }
+assert.ok((await stat(resolve(root, "site", "index.html"))).isFile(), "Missing site/index.html redirect");
+const base = "https://dkkowalski.github.io/Lateef/";
+for (const name of ["index.html", "install.html", "privacy.html", "security.html"]) {
+  const html = await readFile(resolve(root, name), "utf8");
+  const title = html.match(/<title>([^<]*)<\/title>/)?.[1].trim();
+  const description = html.match(/<meta name="description" content="([^"]*)"/)?.[1].trim();
+  const canonical = html.match(/<link rel="canonical" href="([^"]*)"/)?.[1].trim();
+  assert.ok(title, `${name}: empty title`);
+  assert.ok(description && description.length <= 155, `${name}: missing or too-long description`);
+  assert.ok(canonical && canonical.startsWith(base), `${name}: missing canonical under ${base}`);
+  assert.equal(html.match(/<main id="main"/g)?.length, 1, `${name}: needs exactly one <main id="main">`);
+}
+const sumsText = await readFile(resolve(root, "downloads", "SHA256SUMS"), "utf8");
+const listed = new Map(sumsText.split("\n").filter(Boolean).map(line => { const m = line.match(/^([a-f0-9]{64})  (\S+)$/); assert.ok(m, `Bad SHA256SUMS line: ${line}`); return [m[2], m[1]]; }));
+for (const path of all.filter(p => relative(resolve(root, "downloads"), p).split(sep)[0] !== ".." && !p.endsWith("SHA256SUMS"))) {
+  const name = relative(resolve(root, "downloads"), path);
+  assert.ok(listed.has(name), `Download missing from SHA256SUMS: ${name}`);
+  assert.equal(createHash("sha256").update(await readFile(path)).digest("hex"), listed.get(name), `Checksum mismatch: ${name}`);
+  listed.delete(name);
+}
+assert.equal(listed.size, 0, `SHA256SUMS lists missing files: ${[...listed.keys()]}`);
 let references = 0;
 for (const path of all) {
   if (path.endsWith('.js')) execFileSync(process.execPath, ['--check', path]);
@@ -28,7 +50,7 @@ for (const path of all) {
     const target = fileURLToPath(targetURL);
     const inside = relative(root, target);
     assert.ok(inside !== '..' && !inside.startsWith(`..${sep}`), `Link leaves the site: ${value}`);
-    assert.ok((await stat(target)).isFile(), `Missing target: ${value}`);
+    assert.ok((await stat(target.endsWith(sep) ? resolve(target, "index.html") : target)).isFile(), `Missing target: ${value}`);
     if (targetURL.hash && target.endsWith('.html')) {
       const id = decodeURIComponent(targetURL.hash.slice(1));
       const targetText = await readFile(target, 'utf8');

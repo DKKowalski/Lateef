@@ -4,9 +4,9 @@ The static product website for **Lateef** (lah-TEEF), an independent Chrome exte
 
 Repository: https://github.com/DKKowalski/Lateef
 
-GitHub Pages address after deployment: https://dkkowalski.github.io/Lateef/
+Public address: https://dkkowalski.github.io/Lateef/
 
-Direct website address when publishing the repository branch: https://dkkowalski.github.io/Lateef/site/
+The Actions build also writes a small redirect at `/Lateef/site/` that forwards to the main address, so an earlier shared `/site/` link keeps working.
 
 ## Work locally
 
@@ -33,7 +33,7 @@ The build copies only `site/` to `dist/`. Checks validate the four pages, relati
 
 The workflow follows [GitHub's Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages). Relative links support the `/Lateef/` prefix without a framework base-URL setting. No Sites/ChatGPT hosting setup is required.
 
-Publishing `main` directly from **Deploy from a branch → / (root)** also works: the repository's root `index.html` redirects to `site/`, which contains the complete website. Keep this entry point when updating the site. The Actions build publishes the website directly at the main Pages address, without the redirect.
+Publishing `main` directly from **Deploy from a branch → / (root)** also works: the repository's root `index.html` redirects to `site/`, which contains the complete website. Keep this entry point when updating the site. The Actions build publishes the website directly at the main Pages address, which is the public address.
 
 ## Content and assets
 

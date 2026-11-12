@@ -1,4 +1,4 @@
-// Original project helpers; independent of DOM and any course implementation.
+// Original project helpers: pure easing and spring math, independent of the DOM.
 (function(global){
  const clamp=x=>Math.max(0,Math.min(1,x));
  const ease=x=>{const p=clamp(x);return p*p*p*(p*(p*6-15)+10);};
