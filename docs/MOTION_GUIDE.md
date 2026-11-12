@@ -9,10 +9,14 @@ Read this file, then inspect:
 - `site/index.html`: the illustration's geometry, semantic controls and labels.
 - `site/motion-math.js`: pure interpolation, route geometry and spring helpers.
 - `site/motion.js`: scoped scene controllers and input-driven arrow springs.
-- `site/style.css`: visual styling; search for “SVG motion revision”.
+- `site/style.css`: visual styling; see the “Demo scene”, “Access tile” and “Connection tile” sections.
 - `the companion project’s test/motion.test.mjs` and the companion project’s browser checks: numerical and real-browser checks.
 
 The illustration does not control Chrome. Keep simulated interactions labelled as illustrations. Never imply that an animation proves a real file was transmitted or access was granted in the actual browser extension.
+
+## The current scene
+
+One browser window with two tabs. In the active tab the visitor's own notes are typed at a steady pace for the whole loop; that typing never waits for, or reacts to, the agent. A card for the background tab shows three steps (read, fill, attach), each with a small illustration, the real tool name, and a status mark that goes from idle to busy to ticked. The dark tile shows one shared tab among private ones, with packets travelling both ways while sample access holds. The loop is 14 seconds; reduced motion shows the completed state at 11 seconds. All of it is driven by custom properties that `draw(t)` sets on `.bento`, so any moment can be inspected with `seek`.
 
 ## The project's motion contract
 
