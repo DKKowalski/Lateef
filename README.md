@@ -6,6 +6,8 @@ Repository: https://github.com/DKKowalski/Lateef
 
 GitHub Pages address after deployment: https://dkkowalski.github.io/Lateef/
 
+Direct website address when publishing the repository branch: https://dkkowalski.github.io/Lateef/site/
+
 ## Work locally
 
 Requires Node.js 22+. No dependency installation or API keys are needed.
@@ -30,6 +32,8 @@ The build copies only `site/` to `dist/`. Checks validate the four pages, relati
 3. The workflow builds, checks and deploys `dist/`. Pull requests run build/check only.
 
 The workflow follows [GitHub's Pages workflow documentation](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages). Relative links support the `/Lateef/` prefix without a framework base-URL setting. No Sites/ChatGPT hosting setup is required.
+
+Publishing `main` directly from **Deploy from a branch → / (root)** also works: the repository's root `index.html` redirects to `site/`, which contains the complete website. Keep this entry point when updating the site. The Actions build publishes the website directly at the main Pages address, without the redirect.
 
 ## Content and assets
 
