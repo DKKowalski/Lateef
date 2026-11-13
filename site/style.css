@@ -123,7 +123,6 @@ h1{font-size:clamp(34px,5vw,62px);line-height:1.05;letter-spacing:-.04em;max-wid
 .chip{flex:none;align-items:baseline;gap:7px;padding:6px 14px;font-size:15px}
 .chip small{font:500 11px/1 var(--mono);color:var(--muted);transition:color .2s}
 .chips .spacer{flex:1}
-.chip.action svg{align-self:center;width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
 /* Gallery: each stage holds one drawing and one button; the caption sits underneath. */
 .gallery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(22px,2.6vw,34px) clamp(12px,1.6vw,22px)}
@@ -138,8 +137,7 @@ h1{font-size:clamp(34px,5vw,62px);line-height:1.05;letter-spacing:-.04em;max-wid
 .art .on-pastel{fill:var(--on-pastel)}
 .art .tiny{font-size:9px}
 .thick{stroke-width:3}.dashed{stroke-dasharray:3 6}
-.pill{gap:8px;padding:8px 12px 8px 14px;font:500 13px/1.5 var(--mono)}
-.pill svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.pill{padding:8px 16px;font:500 13px/1.5 var(--mono)}
 html:not(.js) .pill,html:not(.js) [data-replay-all],html:not(.js) [data-copy],html:not(.js) [data-theme-toggle]{display:none}
 .caption{padding:12px 4px 0}
 .caption h3{font-size:16px;line-height:1.4}
