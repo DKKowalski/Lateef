@@ -6,17 +6,45 @@ This is an original, project-specific engineering guide. It records decisions, e
 
 Read this file, then inspect:
 
-- `site/index.html`: the illustration's geometry, semantic controls and labels.
-- `site/motion-math.js`: pure interpolation, route geometry and spring helpers.
-- `site/motion.js`: scoped scene controllers and input-driven arrow springs.
-- `site/style.css`: visual styling; see the “Demo scene”, “Access tile” and “Connection tile” sections.
+- `site/index.html`: each stage's geometry, its button and its caption. Every animated part carries a primitive class (`a-draw`, `a-pop`, …) and its delay as `--d`.
+- `site/style.css`: the motion tokens at the top, then “Controls”, “Drawing primitives” and “Access stage”.
+- `site/motion.js`: when stages play, the boop, and the input-driven arrow springs.
+- `site/motion-math.js`: pure interpolation and spring helpers.
 - `the companion project’s test/motion.test.mjs` and the companion project’s browser checks: numerical and real-browser checks.
 
 The illustration does not control Chrome. Keep simulated interactions labelled as illustrations. Never imply that an animation proves a real file was transmitted or access was granted in the actual browser extension.
 
 ## The current scene
 
-One browser window with two tabs. In the active tab the visitor's own notes are typed at a steady pace for the whole loop; that typing never waits for, or reacts to, the agent. A card for the background tab shows three steps (read, fill, attach), each with a small illustration, the real tool name, and a status mark that goes from idle to busy to ticked. The dark tile shows one shared tab among private ones, with packets travelling both ways while sample access holds. The loop is 14 seconds; reduced motion shows the completed state at 11 seconds. All of it is driven by custom properties that `draw(t)` sets on `.bento`, so any moment can be inspected with `seek`.
+The home page is a gallery of nine stages. Eight show one tool each (status, tabs, navigate, snapshot, find, fill, click, upload); the ninth is a sample access switch. A stage is a white card holding one SVG drawing and one button named after the tool. The caption sits under the card.
+
+Every drawing rests in its finished state. Adding `.is-playing` to the stage replays its parts from their first frame; the class comes off again about 2.3 seconds later. A stage plays once when it first scrolls into view, again when its button is pressed, and again when a mouse pointer enters the card. “Replay all” plays the eight tool stages a beat apart. Nothing on the page loops, so there is no pause control: no motion runs longer than a few seconds or starts again by itself.
+
+To inspect a moment, freeze it: give every animated part `animation-play-state: paused` and `animation-delay: calc(var(--d, 0ms) - <time>)` with `.is-playing` on the stage. That shows the exact frame at `<time>` for every part at once.
+
+## Tokens and primitives
+
+Springs are design tokens, like colours. There are three, each stored with the duration it was sampled for: `--spring-snappy` (controls and ink arriving), `--spring-soft` (things gliding into place) and `--spring-bouncy` (paper landing, seals popping). They are `linear()` curves sampled from a damped spring, with a cubic-bezier fallback declared first for browsers without `linear()`. `--relax` is the one curve for reverting. Use these before adding a new curve, and keep a spring with its own duration.
+
+Drawings are built from a small set of primitives rather than one keyframe per drawing:
+
+- `a-draw` draws a normalised stroke; `a-flash` draws it and fades it out.
+- `a-pop`, `a-grow`, `a-wipe` scale from nothing, from the bottom edge, and from the left edge.
+- `a-rise`, `a-nudge`, `a-glide` bring a part in from a short distance.
+- `a-type` reveals one character; `a-sweep` and `a-ring` are the scan line and the focus ring.
+- `a-press`, `a-drop`, `a-flap` squash on contact, land with a squash, and swing a hinged part.
+
+Squash and stretch stays small (about 10–15%) and always resolves to the true shape. A new drawing should be composed from these with `--d` delays before anything bespoke is written.
+
+## Controls share one idea
+
+Every control answers in the same family of ways, so the page feels like one object:
+
+- **Buttons each have one effect**, rebuilt after Tiny Mighty Buttons: the lime `.btn` swells and rounds off, a `.pill` fills from below while its label flips colour, a `.chip` fills from its middle, and the replay chip tilts. The flipping label is drawn with `text-shadow`, so the text exists once in the document. A new control should reuse one of these four, not add a fifth.
+- **Icons get a boop.** A small rotation that is applied on enter and removed on a 150 ms timer, so it completes however briefly the pointer passes. Set the pose per icon with `--boop`.
+- **Arrows stretch.** A live spring in `motion.js` that keeps its velocity when interrupted.
+
+Entering is quick and springy; leaving is slower and relaxed. The transition on the base rule is the leaving one, and the hover rule overrides it. Hover effects sit behind `(hover: hover) and (pointer: fine)` and only go on things that can be pressed. The one exception is a stage, which replays on hover because the motion explains the tool.
 
 ## The project's motion contract
 
@@ -34,11 +62,10 @@ Do not invent a new bounce, orbit, colour pulse or confetti system for each comp
 
 Write down the action, visual response and end state. In this project:
 
-- Share sample access: reveal the authorized route and permit progress feedback.
-- Revoke sample access: withdraw the route quickly and remove success feedback. Do not continue showing an attached-file tick.
-- Pause: retain the exact illustration state. Do not reset the animation.
-- Replay: reset the illustration while preserving the user's chosen access setting.
-- Reduced motion: present a meaningful static state, including the correct revoked state.
+- Share sample access: draw the route in, then the tick, then tint the tab.
+- Revoke sample access: withdraw the route at once and put the lock back with a small rebound. No tick remains.
+- Replay: restart one stage from its first frame. It never changes the access switch.
+- Reduced motion: every stage shows its finished state, including the correct revoked state. Pressing a stage's button confirms with a short fade and nothing travels.
 
 The share and revoke actions deliberately have different durations. A permissions withdrawal should be clear promptly; it does not need a celebratory rebound. These are simulation controls, not product permissions.
 
@@ -46,17 +73,18 @@ The share and revoke actions deliberately have different durations. A permission
 
 Each SVG has a stable viewBox. Responsive CSS changes its display size while geometry remains in SVG units. Put pivots in that same coordinate system.
 
-For our file, separate responsibilities with nested groups:
+For a part that is placed and also animated, separate the two with nested groups:
 
 ```html
-<g class="file-travel">
-  <g class="file-sheet">
-    <!-- original paper geometry and fold -->
+<g transform="translate(120 114)">
+  <g class="a-drop">
+    <!-- paper geometry -->
+    <g class="a-flap"><!-- the fold --></g>
   </g>
 </g>
 ```
 
-Translate the outer group along its trajectory. Apply the small material response around the paper's own centre on the inner group. Give the fold its own hinge. A transform around the document's top-left corner is not equivalent to a transform around the paper's centre.
+The outer group only places the part, with an SVG `transform` attribute. The inner group only animates, with CSS. Animated parts use `transform-box: fill-box`, so their pivot is their own box: the centre by default, the bottom edge for things that land, and the hinge corner for the fold. A transform around the document's top-left corner is not equivalent to a transform around the paper's centre.
 
 Avoid mixing a CSS transform and an SVG transform attribute on the same node unless you have deliberately tested their interaction. Extra wrappers are often clearer than one long transform with competing owners.
 
@@ -82,32 +110,32 @@ For a stroke-only progress path, normalize its path length and animate the offse
 }
 ```
 
-Clamp progress to 0–1. Test the path at zero as well as halfway and at completion; rounded caps and antialiasing can leave tiny marks. In this project the route also has an opacity envelope so the reset is hidden. The static browser surface never fades out to disguise a reset.
+Clamp progress to 0–1. Test the path at zero as well as halfway and at completion; rounded caps and antialiasing can leave tiny marks. In this project `draw` starts at zero opacity for its first few percent, which hides the round cap that would otherwise sit at the start of the path.
 
 A filled silhouette does not become a handwriting animation merely by giving its border a dash pattern. Use a real centreline stroke, or deliberately reveal a fill through a mask.
 
-## A mask is a compositing operation
+## Masks, if one is added
 
-The file's progress fill is revealed inside its page silhouette. The visible border is drawn independently, so the moving fill cannot erase the outline.
+No drawing uses a mask at the moment. If one is needed:
 
 - Specify mask units, content units, bounds and mask type explicitly.
 - Apply the mask to a wrapper when the clipping region must stay stationary while a child moves.
 - Account for paint order: masking an existing stroke does not generate a fresh outline around the resulting cutout.
-- Inspect thin edges at actual icon size; a large screenshot can hide muddy joins.
+- Inspect thin edges at actual size; a large screenshot can hide muddy joins.
 
-Do not use a background-coloured shape as a fake cutout if the component may appear over different surfaces.
+Do not use a background-coloured shape as a fake cutout. The cards change colour between the light and dark themes.
 
 ## Namespace every SVG definition
 
 Gradients and masks resolve by ID. Two copies of the scene must not share IDs or accidentally reference one another's definitions.
 
-`mount(scene)` rewrites definition IDs and their local URL references with an instance prefix, then scopes element queries to that scene. Controls use data attributes instead of duplicated HTML IDs. Reuse the controller when mounting the same scene twice; call its destroy method before removing a scene.
+`mount(gallery)` rewrites any definition IDs and their local URL references with an instance prefix, then scopes element queries to that gallery. Controls use data attributes instead of duplicated HTML IDs. Mounting the same gallery twice returns the same controller; call its destroy method before removing a gallery.
 
 If porting to a server-rendered framework, use that framework's hydration-stable ID facility. A random ID independently generated on server and client can break hydration. The current site is vanilla JavaScript, not server-rendered React.
 
 ## Distinguish authored motion from interactive motion
 
-The illustrative workflow uses a clock so exact moments can be inspected. A closed-form spring is sufficient for an arrival that will run from its defined initial state.
+The stages are authored motion: each runs from a defined first frame to a defined last one, so a sampled `linear()` spring is enough.
 
 An interactive control is different: it can be interrupted. Its spring must retain position and velocity. `stepSpring` retargets the current state rather than restarting a time curve. Frame deltas are bounded and subdivided for stability. Spring presets are grouped by material role; start by tuning a shared role rather than adding a one-off curve.
 
@@ -117,13 +145,12 @@ The arrow's shaft and head are independently defined geometry. The head changes 
 
 ## Scheduler and accessibility requirements
 
-- Keep a visible pause/resume control and an explicit replay action.
+- Keep an explicit replay action on every stage. If anything is ever made to loop or to run longer than five seconds, it needs a visible pause control as well.
 - Honour reduced motion from first paint and when the preference changes.
 - Give access changes concise status text; do not announce every animation frame.
 - Focus and pointer input should both receive feedback. Links must still navigate normally.
-- Suspend the scene when it is outside the viewport or the tab is hidden.
-- Stop animation work when paused and settled. An active access transition may finish while the workflow is paused.
-- Reset timing on resume so a background tab does not jump forward.
+- A stage plays on first view only once; do not replay it every time it scrolls back in.
+- Do no per-frame JavaScript for the drawings. Only the arrow springs use animation frames, and they stop when settled.
 - Cache node references. Avoid layout reads and DOM-wide queries in every frame.
 - Provide destroy/cleanup for reusable scenes: listeners, observer and scheduled frames.
 
@@ -136,13 +163,13 @@ Check these conditions before claiming completion:
 1. No horizontal overflow at desktop or mobile widths; links and local downloads resolve.
 2. A reveal has an intermediate state, a genuinely hidden initial state and a complete final state.
 3. Revoke removes success feedback; share restores the intended permitted state.
-4. Pause is stable, replay behaves as specified, and reduced motion stays stable.
+4. Replay restarts cleanly mid-play, and reduced motion shows the finished state without travel.
 5. Rapid hover/focus reversals remain finite and settle. Do not only inspect a completed transition.
-6. Two scenes use unique definition IDs and can render different times independently.
-7. Nested transforms stay anchored; masks still work at actual icon size and on different surfaces.
+6. Two galleries use unique definition IDs and play independently.
+7. Nested transforms stay anchored at mobile and desktop sizes, in the light and dark themes.
 8. No course media, copied proprietary example code, tokens or real browser content enters a public release.
 
-The `LateefMotion.mount(scene)` controller supports `seek(seconds)` for deterministic paused inspection and `destroy()` for cleanup. This is an illustration API, not a browser-control API.
+The `LateefMotion.mount(gallery)` controller supports `play(index)`, `replayAll()` and `destroy()`. This is an illustration API, not a browser-control API.
 
 ## How another model should report the change
 

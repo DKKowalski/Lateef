@@ -1,91 +1,101 @@
-// Original project implementation. Consult MOTION_GUIDE.md before changing timing.
-// Original implementation of the landing-page demonstration timeline; it has no runtime dependencies.
+// Original project implementation. Consult docs/MOTION_GUIDE.md before changing timing.
+// The gallery's drawings are CSS keyframes that rest in their finished state. This file only decides when they play,
+// and runs the two input-driven effects (boops and stretching arrows) that have to survive being interrupted.
 (function(){
-const {clamp,between,spring,stepSpring}=globalThis.LateefMotionMath;
+const {stepSpring}=globalThis.LateefMotionMath;
 const reduce=matchMedia('(prefers-reduced-motion: reduce)');
+const fine=matchMedia('(hover: hover) and (pointer: fine)');
+const PHYSICS=Object.freeze({control:{stiffness:420,damping:27}});
+const PLAY_MS=2300,REDUCED_MS=400,BOOP_MS=150;
 const instances=new WeakMap();let sequence=0;
-const PHYSICS=Object.freeze({control:{stiffness:420,damping:27},arrival:{omega:14,zeta:.78},accent:{omega:18,zeta:.72}});
-function namespaceSVG(scene,prefix){
+
+// Masks, clips and gradients resolve by ID, so every mounted gallery gets its own prefix.
+function namespaceSVG(scope,prefix){
  const ids=new Map();
- for(const el of scene.querySelectorAll('svg [id]')){const old=el.id;el.id=prefix+old;ids.set(old,el.id);}
- for(const el of scene.querySelectorAll('svg *'))for(const a of [...el.attributes]){
+ for(const el of scope.querySelectorAll('svg [id]')){const old=el.id;el.id=prefix+old;ids.set(old,el.id);}
+ if(!ids.size)return;
+ for(const el of scope.querySelectorAll('svg *'))for(const a of [...el.attributes]){
   if(a.value.includes('url(#'))el.setAttribute(a.name,a.value.replace(/url\(#([^)]+)\)/g,(_,id)=>`url(#${ids.get(id)||id})`));
   if(a.name==='href'&&a.value.startsWith('#')&&ids.has(a.value.slice(1)))el.setAttribute(a.name,'#'+ids.get(a.value.slice(1)));
  }
 }
-const LOOP=14,REST=11; // REST is the meaningful static frame used for reduced motion.
-function mount(scene){
- if(instances.has(scene))return instances.get(scene);
- const root=scene.querySelector('.bento');if(!root)return;
- const $=s=>scene.querySelector(s), nodes={toggle:$('[data-motion-toggle]'),replay:$('[data-motion-replay]'),phase:$('[data-demo-phase]'),access:$('[data-access-toggle]'),status:$('[data-access-status]'),agent:$('[data-agent-status]'),you:$('[data-you]'),field:$('[data-fill]'),out:$('[data-packet="out"]'),back:$('[data-packet="in"]'),tab:$('.authorized'),tabState:$('.tab-state'),travel:$('.file-travel'),sheet:$('.file-sheet'),fold:$('.file-fold'),fill:$('.file-fill'),seal:$('.file-seal')};
- const steps=[...scene.querySelectorAll('.tool-step')],events=new AbortController(),written=new Map();
- const yourText=nodes.you.dataset.you,fieldText=nodes.field.dataset.fill;
- namespaceSVG(scene,`tl-scene-${++sequence}-`);
- let paused=reduce.matches,clock=0,previous,raf=0,visible=true,destroyed=false,allowed=nodes.access.getAttribute('aria-pressed')!=='false',access=allowed?1:0,action,label;
- const set=(name,value)=>root.style.setProperty(name,value);
- // Text is revealed by whole characters and only touched when the count changes.
- function write(el,text,progress){const n=Math.round(text.length*clamp(progress));if(written.get(el)!==n){written.set(el,n);el.textContent=text.slice(0,n);}}
- function draw(t){
-  const p=t%LOOP,ink=between(p,0,.5)*(1-between(p,13.1,13.9)),amount=clamp(access);
-  set('--demo-time',String(t));set('--ink-opacity',ink);set('--spin',`${(t*320)%360}deg`);
-  // Your tab: steady typing that never waits for, or reacts to, the agent.
-  write(nodes.you,yourText,(p-.6)/9.6);set('--caret',p>.4&&p<10.6?(paused?1:.5+.5*Math.sin(p*7)):0);
-  // Shared tab: the route stays inked while access holds and packets travel both ways.
-  const grant=clamp(spring(p-.35,17,.78));
-  set('--route-offset',1-between(p,.5,2.1)*amount);set('--grant-offset',1-grant*ink*amount);
-  nodes.tab.setAttribute('transform',`translate(232 75) scale(${.95+.05*grant*amount})`);
-  const live=ink*amount*between(p,2,2.3),q=(t*.55)%1,r=(q+.5)%1;
-  nodes.out.setAttribute('cx',98+102*q);nodes.out.setAttribute('opacity',live*Math.sin(Math.PI*q));
-  nodes.back.setAttribute('cx',200-102*r);nodes.back.setAttribute('opacity',live*Math.sin(Math.PI*r));
-  // Grant and revoke are different actions; denying access never produces a success tick.
-  const read=between(p,1.1,3.3)*amount,typing=clamp((p-4.2)/1.9)*amount,upload=between(p,7.1,9.2)*amount,confirm=between(p,9.25,9.7)*amount;
-  set('--read',read);set('--scan-opacity',ink*amount*between(p,1,1.2)*(1-between(p,3.3,3.7)));set('--read-done',ink*amount*between(p,2.9,3.5));
-  write(nodes.field,fieldText,typing);set('--fill-active',ink*amount*between(p,4,4.3)*(1-between(p,6.3,6.8)));
-  set('--upload',upload);
-  // Each group has one transform responsibility: trajectory, material response, then seal.
-  const elapsed=Math.max(0,p-7.05),arrival=spring(p-7.05,PHYSICS.arrival.omega,PHYSICS.arrival.zeta);
-  const strain=.045*Math.exp(-elapsed*5)*Math.sin(elapsed*13);
-  nodes.travel.setAttribute('transform',`translate(${(1-arrival)*-8} ${(1-arrival)*-8})`);
-  nodes.sheet.setAttribute('transform',`translate(22 25) rotate(${Math.exp(-elapsed*6)*Math.sin(elapsed*16)*1.8}) scale(${1+strain} ${1/(1+strain)}) translate(-22 -25)`);
-  nodes.fold.setAttribute('transform',`translate(26 14) rotate(${-Math.exp(-elapsed*5)*Math.sin(elapsed*16-1)*3}) translate(-26 -14)`);
-  nodes.fill.setAttribute('y',46-43*upload);
-  const stamp=Math.max(.01,spring(p-9.2,PHYSICS.accent.omega,PHYSICS.accent.zeta));
-  nodes.seal.style.opacity=ink*between(p,9.2,9.35)*amount;
-  nodes.seal.setAttribute('transform',`translate(32 39) scale(${stamp}) translate(-32 -39)`);
-  set('--file-tick-offset',1-confirm);
-  // A step is reached, then busy, then ticked. The tab's own indicator summarises all three.
-  const windows=[[1,3.7],[4,6.8],[7,9.9]],completion=[between(p,3.3,3.7),between(p,6.3,6.8),between(p,9.25,9.7)];
-  steps.forEach((el,i)=>{const [start,end]=windows[i],reached=ink*amount*between(p,start,start+.4),on=reached*(1-between(p,end-.4,end));
-   el.style.setProperty('--reached',reached);el.style.setProperty('--step-bg',on);el.style.setProperty('--busy',on*(1-completion[i]));el.style.setProperty('--tick-offset',1-completion[i]*ink*amount);});
-  nodes.tabState.style.setProperty('--busy',ink*amount*between(p,1,1.3)*(1-completion[2]));nodes.tabState.style.setProperty('--tick-offset',1-completion[2]*ink*amount);
-  // The connection tile only shows that a path exists; it is not gated by the sample access.
-  const f=(t*.4)%1,g=(f+.5)%1;set('--flow',f);set('--flow-opacity',Math.sin(Math.PI*f));set('--flow2',g);set('--flow2-opacity',Math.sin(Math.PI*g));
-  const next=!allowed?'Access revoked':p<1?'Waiting':p<3.8?'01 — Read':p<6.9?'02 — Fill':p<9.8?'03 — Attach':'04 — Complete';
-  if(next!==label){label=next;nodes.phase.textContent=next;nodes.agent.textContent=!allowed?'No access':p<1?'Waiting':p<3.8?'Reading':p<6.9?'Filling':p<9.8?'Attaching':'Done';}
- }
- function update(){nodes.toggle.setAttribute('aria-pressed',String(paused));nodes.toggle.textContent=paused?'Resume':'Pause';}
- function wake(){if(!raf&&!destroyed&&!document.hidden){raf=requestAnimationFrame(frame);}}
- function frame(now){raf=0;const dt=previous===undefined?0:Math.min((now-previous)/1000,.05);previous=now;
-  const playing=!paused&&visible&&!document.hidden;
-  if(playing)clock+=dt;
-  if(action){const p=clamp((now-action.start)/action.duration);access=action.from+(action.to-action.from)*between(p,0,1);if(p===1)action=undefined;}
-  if(playing||action||access!==(allowed?1:0))draw(clock);
-  if(!action)access=allowed?1:0;
-  if(playing||action)wake();else{draw(clock);previous=undefined;}
- }
- function setAccess(){allowed=!allowed;root.dataset.access=allowed?'shared':'revoked';nodes.access.setAttribute('aria-pressed',String(allowed));nodes.access.textContent=allowed?'Revoke sample access':'Share sample tab';nodes.status.textContent=allowed?'Sample tab shared.':'Sample access revoked. No file will be attached.';
-  if(reduce.matches){access=allowed?1:0;action=undefined;draw(REST);}else{action={from:access,to:allowed?1:0,start:performance.now(),duration:allowed?360:150};wake();}
- }
- const on=(el,type,fn)=>el.addEventListener(type,fn,{signal:events.signal});
- on(nodes.toggle,'click',()=>{paused=!paused;update();previous=undefined;wake();});
- on(nodes.replay,'click',()=>{clock=reduce.matches?REST:0;previous=undefined;paused=reduce.matches;action=undefined;access=allowed?1:0;draw(clock);update();wake();});
- on(nodes.access,'click',setAccess);
- on(reduce,'change',()=>{paused=reduce.matches;clock=paused?REST:clock;action=undefined;access=allowed?1:0;previous=undefined;draw(clock);update();wake();});
- on(document,'visibilitychange',()=>{previous=undefined;if(!document.hidden)wake();});
- const observer=new IntersectionObserver(entries=>{visible=entries[0].isIntersecting;previous=undefined;if(visible)wake();},{threshold:.05});observer.observe(root);
- const api={seek(seconds){if(!Number.isFinite(seconds)||seconds<0)throw new Error('Time must be non-negative.');paused=true;clock=seconds;action=undefined;access=allowed?1:0;draw(clock);update();},destroy(){destroyed=true;cancelAnimationFrame(raf);events.abort();observer.disconnect();instances.delete(scene);}};
- instances.set(scene,api);clock=reduce.matches?REST:0;draw(clock);update();wake();return api;
+
+// A boop runs in full however briefly the pointer passes: the class goes on, and comes off on a timer, not on leave.
+function boop(el){
+ if(reduce.matches||!el)return;
+ clearTimeout(el.boopTimer);el.classList.add('is-booped');
+ el.boopTimer=setTimeout(()=>el.classList.remove('is-booped'),BOOP_MS);
 }
+
+function mount(gallery){
+ if(instances.has(gallery))return instances.get(gallery);
+ const events=new AbortController(),timers=new Set(),stages=[...gallery.querySelectorAll('[data-stage]')];
+ const on=(el,type,fn)=>el.addEventListener(type,fn,{signal:events.signal});
+ const later=(fn,ms)=>{const id=setTimeout(()=>{timers.delete(id);fn();},ms);timers.add(id);return id;};
+ namespaceSVG(gallery,`lateef-gallery-${++sequence}-`);
+
+ // Removing the class, forcing a style flush and adding it again restarts every keyframe from its first frame.
+ function play(stage){
+  clearTimeout(stage.playTimer);timers.delete(stage.playTimer);
+  stage.classList.remove('is-playing');void stage.offsetWidth;stage.classList.add('is-playing');
+  stage.playTimer=later(()=>stage.classList.remove('is-playing'),reduce.matches?REDUCED_MS:PLAY_MS);
+ }
+ const playing=stage=>stage.classList.contains('is-playing');
+
+ // Each stage plays once when it first comes into view. Neighbours in a row start a beat apart.
+ const seen=new IntersectionObserver(entries=>{
+  let order=0;
+  for(const entry of entries){
+   if(!entry.isIntersecting)continue;
+   seen.unobserve(entry.target);
+   if(!reduce.matches)later(()=>play(entry.target),140*order++);
+  }
+ },{threshold:.55});
+
+ for(const stage of stages){
+  const button=stage.querySelector('[data-play]');
+  if(button){
+   on(button,'click',()=>play(stage));
+   on(button,'pointerenter',()=>boop(button));
+   on(button,'focus',()=>boop(button));
+  }
+  // Hovering a drawing replays it: the motion shows what the tool does, so it is not limited to the button.
+  on(stage,'pointerenter',event=>{if(event.pointerType==='mouse'&&fine.matches&&!playing(stage)&&!stage.hasAttribute('data-access'))play(stage);});
+  if(!stage.hasAttribute('data-access'))seen.observe(stage);
+ }
+
+ // The access stage is a sample switch, not a product permission. Its two directions are styled separately in CSS.
+ for(const stage of gallery.querySelectorAll('[data-access]')){
+  const toggle=stage.querySelector('[data-access-toggle]'),status=stage.querySelector('[data-access-status]'),text=toggle.querySelector('[data-label]');
+  on(toggle,'click',()=>{
+   const shared=stage.dataset.access!=='shared';
+   stage.dataset.access=shared?'shared':'revoked';
+   toggle.setAttribute('aria-pressed',String(shared));
+   text.textContent=shared?'Revoke sample access':'Share sample tab';
+   status.textContent=shared?'Sample tab shared.':'Sample access revoked.';
+  });
+  on(toggle,'pointerenter',()=>boop(toggle));
+ }
+
+ const api={
+  play(index){if(stages[index])play(stages[index]);},
+  replayAll(){stages.filter(s=>!s.hasAttribute('data-access')).forEach((stage,i)=>later(()=>play(stage),reduce.matches?0:90*i));},
+  destroy(){events.abort();seen.disconnect();for(const id of timers)clearTimeout(id);timers.clear();for(const s of stages)s.classList.remove('is-playing');instances.delete(gallery);}
+ };
+ instances.set(gallery,api);return api;
+}
+
+for(const gallery of document.querySelectorAll('[data-gallery]')){
+ const api=mount(gallery);
+ for(const button of document.querySelectorAll(`[data-replay-all="${gallery.id}"]`)){
+  button.addEventListener('click',()=>api.replayAll());
+  button.addEventListener('pointerenter',()=>boop(button));
+ }
+}
+for(const el of document.querySelectorAll('[data-boop]')){
+ el.addEventListener('pointerenter',()=>boop(el));el.addEventListener('focus',()=>boop(el));
+}
+
 // Input-driven springs have velocity. Retargeting must not recreate a time curve.
 for(const svg of document.querySelectorAll('.interactive-arrow')){
  const link=svg.closest('a,button');if(!link)continue;
@@ -101,6 +111,5 @@ for(const svg of document.querySelectorAll('.interactive-arrow')){
  reduce.addEventListener('change',()=>{clearTimeout(timer);state.x=state.v=state.target=0;cancelAnimationFrame(raf);raf=0;last=undefined;paint(0);});
  document.addEventListener('visibilitychange',()=>{last=undefined;if(!document.hidden&&(state.v!==0||state.x!==state.target))wake();});
 }
-for(const scene of document.querySelectorAll('.demo-section'))mount(scene);
-globalThis.LateefMotion=Object.freeze({mount});
+globalThis.LateefMotion=Object.freeze({mount,boop});
 })();

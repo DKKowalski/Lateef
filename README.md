@@ -37,7 +37,7 @@ Publishing `main` directly from **Deploy from a branch → / (root)** also works
 
 ## Content and assets
 
-- `site/index.html`, `style.css`, `motion.js`, `motion-math.js`: landing page and original animated demonstration.
+- `site/index.html`, `style.css`, `site.js`, `motion.js`, `motion-math.js`: landing page, theme switch and the original illustrated tool gallery.
 - `site/install.html`, `privacy.html`, `security.html`: product documentation.
 - `site/assets/`: SVG/PNG logos and Geist font with its SIL OFL license.
 - `site/downloads/`: beta source ZIP, unpacked extension ZIP and local npm package. Refresh all three together for a new companion release.
@@ -46,3 +46,5 @@ Publishing `main` directly from **Deploy from a branch → / (root)** also works
 The source archive includes the independent extension and MCP companion. Downloads are review beta artifacts; the extension and companion are not on the Chrome Web Store or npm registry. This repository intentionally excludes private browser evaluations, runtime state and proprietary learning material.
 
 Code and original artwork: MIT; Geist font: SIL OFL (included).
+
+Button hover effects are rebuilt in this project's own CSS after [Tiny Mighty Buttons](https://tiny-mighty-buttons.webflow.io/) by Eduard Bodak. The gallery layout draws on [Minimal Gallery](https://minimal.gallery/).
