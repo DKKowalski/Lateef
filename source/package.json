@@ -1,0 +1,58 @@
+{
+  "name": "lateef",
+  "version": "0.2.0-beta.5",
+  "description": "Model-independent MCP tools for background tabs in your existing Chrome window",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://dkkowalski.github.io/Lateef/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DKKowalski/Lateef.git",
+    "directory": "source"
+  },
+  "bugs": {
+    "url": "https://github.com/DKKowalski/Lateef/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "chrome",
+    "browser",
+    "agent",
+    "codex",
+    "claude",
+    "cursor"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "lateef": "bin/lateef.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "extension",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "PRIVACY.md",
+    "CONTRIBUTING.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "node --test test/browser.integration.mjs",
+    "check": "node --check src/broker.mjs && node --check extension/background.js && node --check extension/dom.js && node --check extension/presence.js && node --check src/uploads.mjs && node --check src/mcp.mjs && node --check bin/lateef.mjs && node --check site/dist/motion.js && node --check site/dist/motion-math.js && node --check site/dist/site.js",
+    "start": "node bin/lateef.mjs broker",
+    "release:prepare": "node scripts/prepare-release.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "ws": "8.22.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "playwright-core": "1.65.0-alpha-2026-10-30"
+  }
+}

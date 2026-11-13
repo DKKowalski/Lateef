@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Lateef</title>
+<link rel="stylesheet" href="popup.css">
+<body><header><img src="icons/icon-48.png" width="32" height="32" alt=""><div><h1>Lateef</h1><span class="eyebrow">Your browser, in the background</span></div></header>
+<p id="status" role="status" data-state="off"><span id="state">Loading…</span><small id="detail"></small></p>
+<p id="stale" class="banner" hidden>Lateef was updated. Reload it on <code>chrome://extensions</code> to finish.</p>
+<p id="error" role="alert"></p>
+<form id="pair"><p>Run <code>lateef pair</code> in your terminal, then connect this window.</p><label>Broker port <input id="port" type="number" value="45455" min="1" max="65535" required></label>
+<label>Browser name <input id="name" value="My Chrome" maxlength="80"></label>
+<label>One-time pairing code <input id="code" type="password" autocomplete="off" required></label>
+<button>Pair this window</button></form>
+<section id="connected" hidden><button id="window" class="secondary" hidden>Move agents to this window</button>
+<div id="sharing" hidden><p class="legend" id="sessions-label">Share with</p><div id="sessions" role="radiogroup" aria-labelledby="sessions-label"></div><button id="share">Share the current tab</button><p id="note" class="muted" role="status"></p></div>
+<p id="idle" class="muted" hidden>No AI client is connected. Start one that uses Lateef and it will appear here.</p>
+<label class="check"><input id="presence" type="checkbox" checked> Show when an agent is working in a tab</label>
+<label class="check" id="full-row" hidden><input id="full" type="checkbox"> <span>Full control<small>Screenshots, real mouse and keyboard, scripts and logs on agent tabs. Chrome shows a debugging bar while it is in use.</small></span></label>
+<p class="muted">Agent tabs open in the background. Tabs you have not shared stay outside the session.</p><button id="disconnect" class="link">Disconnect this browser</button></section>
+<footer>Selected page content and attached files pass to your AI client and may reach its provider. Share only what you intend.<span id="version"></span></footer><script type="module" src="popup.js"></script></body></html>

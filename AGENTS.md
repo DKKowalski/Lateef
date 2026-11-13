@@ -1,6 +1,6 @@
 # Lateef website
 
-This repository contains the public static website and sanitized beta downloads.
+This repository contains the public static website, sanitized beta downloads, and `source/`: the cleaned source of the extension and companion, copied in at each release. Do not edit `source/` by hand; it is replaced from the release export.
 Edit `site/`; `npm run build` creates the ignored `dist/` directory.
 
 - Keep every page, asset and download link relative so the site works at both `/` and `/Lateef/` on GitHub Pages.

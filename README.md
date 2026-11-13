@@ -1,8 +1,32 @@
-# Lateef website
+# Lateef
 
-The static product website for **Lateef** (lah-TEEF), an independent Chrome extension and local MCP companion. Includes the logo, interactive SVG demonstration, installation/privacy/security pages, locally hosted Geist font and sanitized MIT-licensed beta downloads.
+**Give your agent a tab of its own.** Lateef (lah-TEEF) is an open-source bridge between your AI tools and the Chrome you already use. Your agent works in background tabs, through structured tools, while you keep yours. It works with any MCP client, including Codex, Claude Code and Cursor.
 
-Repository: https://github.com/DKKowalski/Lateef
+- Website and install guide: https://dkkowalski.github.io/Lateef/
+- npm: https://www.npmjs.com/package/lateef
+
+```sh
+npx lateef install codex     # or: claude, cursor
+npx lateef extension         # then load the folder at chrome://extensions
+npx lateef pair
+```
+
+If Lateef is useful to you, a star helps other people find it.
+
+## What is in this repository
+
+| Folder | Contents |
+|---|---|
+| [`source/`](source) | The extension, the local MCP companion and their tests. This is what npm installs. Start with [`source/README.md`](source/README.md). |
+| `site/` | The website, as static files. |
+| `site/downloads/` | The same release as zip and tgz files, with checksums. |
+| `docs/` | The motion guide for the website's drawings. |
+
+`source/` is a cleaned copy made at each release from a private development repository, so its history here is one commit per release. Issues and pull requests are welcome; changes to `source/` are applied upstream and arrive with the next release. Read [`source/SECURITY.md`](source/SECURITY.md) before reporting a vulnerability.
+
+The tests for `source/` run here on Linux, macOS and Windows.
+
+# The website
 
 Public address: https://dkkowalski.github.io/Lateef/
 
@@ -43,7 +67,7 @@ Publishing `main` directly from **Deploy from a branch → / (root)** also works
 - `site/downloads/`: beta source ZIP, unpacked extension ZIP and local npm package. Refresh all three together for a new companion release.
 - `docs/MOTION_GUIDE.md`: instructions for future SVG/motion changes.
 
-The source archive includes the independent extension and MCP companion. Downloads are review beta artifacts; the extension and companion are not on the Chrome Web Store or npm registry. This repository intentionally excludes private browser evaluations, runtime state and proprietary learning material.
+The companion is on npm; the extension is not on the Chrome Web Store. This repository intentionally excludes private browser evaluations, runtime state and proprietary learning material.
 
 Code and original artwork: MIT; Geist font: SIL OFL (included).
 
