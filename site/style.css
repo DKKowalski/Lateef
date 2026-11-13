@@ -96,6 +96,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 .nav-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;font-size:15px}
 .nav-actions>a:not(.btn){color:var(--body);margin-right:6px}
 .nav .btn{padding:7px 16px;font-size:14px}
+.star{display:inline-flex;align-items:center;gap:6px}
+.star svg{fill:var(--accent)}
 
 /* Hero: short and centred. The gallery below is the picture. */
 .hero{display:grid;justify-items:center;text-align:center;gap:18px;padding-block:clamp(28px,5vw,64px) clamp(28px,4vw,48px)}
