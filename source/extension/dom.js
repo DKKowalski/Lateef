@@ -196,12 +196,15 @@ export function domCommand(method, params) {
     if (formTarget && !['_self', '_top', '_parent'].includes(formTarget.toLowerCase())) throw new Error('NEW_WINDOW_FORM: submitting into another window is unsupported');
     // Many apps act on pointerdown or mousedown, not click (Slack's sidebar, X's composer buttons), so send the whole
     // press as a person's click would: over, down, up, then click. These are still DOM events, not trusted input.
+    // A real click lands on the innermost element under the pointer, and apps often listen there (a label or link inside a
+    // row), not on the row. So the events start at the element at the centre point when it is inside the reference.
     const box = el.getBoundingClientRect(), at = { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true, cancelable: true, composed: true, view: window, button: 0 };
-    const pointer = (type, buttons) => el.dispatchEvent(new PointerEvent(type, { ...at, buttons, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
-    pointer('pointerover', 0); el.dispatchEvent(new MouseEvent('mouseover', { ...at, buttons: 0 }));
-    pointer('pointerdown', 1); el.dispatchEvent(new MouseEvent('mousedown', { ...at, buttons: 1 }));
-    pointer('pointerup', 0); el.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
-    if (el.isConnected) el.click(); return { clicked: params.ref };
+    const hit = document.elementFromPoint(at.clientX, at.clientY), spot = hit && el.contains(hit) ? hit : el;
+    const pointer = (type, buttons) => spot.dispatchEvent(new PointerEvent(type, { ...at, buttons, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+    pointer('pointerover', 0); spot.dispatchEvent(new MouseEvent('mouseover', { ...at, buttons: 0 }));
+    pointer('pointerdown', 1); spot.dispatchEvent(new MouseEvent('mousedown', { ...at, buttons: 1 }));
+    pointer('pointerup', 0); spot.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
+    if (spot.isConnected) spot.click(); return { clicked: params.ref };
   }
   if (method === 'hover') {
     // Opens menus and tooltips that listen for the pointer. These are DOM events, not a real pointer.

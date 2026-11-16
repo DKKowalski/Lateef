@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0-beta.8
+
+- `browser_click` starts its events at the innermost element under the reference's centre, as a real click does, so apps that listen on an inner element (Slack's sidebar rows) respond.
+
 ## 0.2.0-beta.7
 
 Upgrading: as for beta 6, update the companion and the extension together.

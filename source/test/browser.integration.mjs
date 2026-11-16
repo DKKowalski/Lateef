@@ -60,7 +60,7 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
       return;
     }
     // Field test 16 Nov 2026: a control that acts on mousedown (Slack's sidebar), and a checkbox past the snapshot limit.
-    if (req.url === '/long') { res.end('<!doctype html><title>Long page</title><div role="treeitem" tabindex="0" onmousedown="document.getElementById(\'said\').textContent=\'Opened by mousedown\'">Open channel</div><p id="said">Closed</p>' + '<button>Filler</button>'.repeat(400) + '<label><input type="checkbox">Also send to channel</label>'); return; }
+    if (req.url === '/long') { res.end('<!doctype html><title>Long page</title><div role="treeitem" tabindex="0" onmousedown="document.getElementById(\'said\').textContent=\'Opened by mousedown\'">Open channel</div><p id="said">Closed</p><div role="treeitem" tabindex="0"><span style="display:block" onclick="document.getElementById(\'inner\').textContent=\'Inner handler ran\'">Inner channel</span></div><p id="inner">Inner idle</p>' + '<button>Filler</button>'.repeat(400) + '<label><input type="checkbox">Also send to channel</label>'); return; }
     if (req.url === '/deep') {
       res.end('<!doctype html><title>Deep inbox fixture</title><main>' + '<div>'.repeat(45) + '<div style="display:contents"><div role="grid"><div role="row"><div role="gridcell"><span>Request for a reference</span></div><div role="gridcell"><button>Open reference message</button></div></div></div></div>' + '</div>'.repeat(45) + '</main>');
       return;
@@ -248,6 +248,8 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   assert.equal(far.length, 1, 'find searches past the snapshot node limit');
   await call('browser_click', { tabId: long.tabId, ref: (await call('browser_find', { tabId: long.tabId, text: 'Open channel' })).matches[0].ref });
   assert.equal((await call('browser_wait', { tabId: long.tabId, text: 'Opened by mousedown' })).met, true, 'a DOM click includes mousedown');
+  await call('browser_click', { tabId: long.tabId, ref: (await call('browser_find', { tabId: long.tabId, text: 'Inner channel' })).matches[0].ref });
+  assert.equal((await call('browser_wait', { tabId: long.tabId, text: 'Inner handler ran' })).met, true, 'a DOM click starts at the innermost element under its centre');
   await call('browser_tabs', { action: 'close', tabId: long.tabId });
   const custom = await call('browser_tabs', { action: 'new', url: fixture + 'custom' });
   const radio = (await call('browser_find', { tabId: custom.tabId, query: 'No Option' })).matches[0];
