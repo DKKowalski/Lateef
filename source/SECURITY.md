@@ -12,7 +12,7 @@ While an agent controls a tab, the extension adds one marker element to that pag
 
 Timeouts are ambiguous: an action may have run even if the result was lost. Mutations are never automatically retried. Reconnection does not authorize switching to another paired profile, window, or session.
 
-Known limitation: the extension proves itself to the broker, but does not yet verify the broker in return. A local program that takes the broker's port while the broker is not running would receive the extension's pairing token on its next reconnect attempt. This needs code already running on your computer; a mutual challenge is planned.
+The extension and the broker prove the pairing to each other. Each answers the other's fresh random challenge with an HMAC keyed by the SHA-256 of the pairing token, so the token is not sent after pairing, and the extension runs no command until the broker has proved itself. When pairing, the broker first proves it issued the pending code (an HMAC keyed by the code's hash), and only then does the extension send the code. A local program that takes the broker's port while the broker is not running learns neither the token nor the code. Extensions older than 0.2.0-beta.6 still send the token, and the broker still accepts them.
 
 This is an early prototype. Do not treat initial tests as an audit or a guarantee for sensitive workflows. Report vulnerabilities privately at https://github.com/DKKowalski/Lateef/security/advisories/new. Do not publish sensitive exploit details in a public issue; do not include pairing codes, tokens, browser data, or authentication cookies in public reports.
 

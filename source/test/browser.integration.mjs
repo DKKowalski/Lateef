@@ -49,6 +49,16 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
       res.end('<!doctype html><title>Editor fixture</title><div id="rich" contenteditable="true" aria-label="Rich editor"></div><div id="plain" contenteditable="true" aria-label="Plain editor"></div><output id="model"></output><script>const rich=document.getElementById("rich");let model="";const render=()=>{rich.textContent=model;document.getElementById("model").textContent="model: "+model};rich.addEventListener("paste",e=>{e.preventDefault();model=e.clipboardData.getData("text/plain");render()});rich.addEventListener("input",render);</script>');
       return;
     }
+    // Field report 15 Nov 2026: custom radios, a labelled custom select, a viewer dialog over the page, text that lands in a frame.
+    if (req.url === '/payments') { res.end('<!doctype html><title>Payments</title><p id="b">Loading</p><script>setTimeout(()=>document.getElementById("b").textContent="Ending balance 0.00",600)</script>'); return; }
+    if (req.url === '/custom') {
+      res.end('<!doctype html><title>Custom controls fixture</title><main><p>Underlying email body</p><p>Is this about billing?</p>'
+        + '<label><input type="radio" name="q" value="yes" style="display:none"><span role="radio" tabindex="0" aria-label="Yes Option 1 of 2">Yes</span></label>'
+        + '<label><input type="radio" name="q" value="no" style="display:none" onchange="document.getElementById(\'picked\').textContent=\'Picked no\'"><span role="radio" tabindex="0" aria-label="No Option 2 of 2">No</span></label><p id="picked">Nothing picked</p>'
+        + '<span id="ba">Billing account</span><div role="combobox" tabindex="0" aria-labelledby="ba" aria-expanded="false" style="width:120px;height:20px" onclick="this.setAttribute(\'aria-expanded\',\'true\');document.getElementById(\'list\').hidden=false"></div><div id="list" role="listbox" hidden><p>No items to display</p></div>'
+        + '</main><div role="dialog" aria-modal="true" aria-label="Letter preview" style="position:fixed;inset:0;background:#fff"><p>Letter page one</p><p>Letter page two</p></div><iframe src="/payments" title="Payments" width="300" height="60"></iframe>');
+      return;
+    }
     if (req.url === '/deep') {
       res.end('<!doctype html><title>Deep inbox fixture</title><main>' + '<div>'.repeat(45) + '<div style="display:contents"><div role="grid"><div role="row"><div role="gridcell"><span>Request for a reference</span></div><div role="gridcell"><button>Open reference message</button></div></div></div></div>' + '</div>'.repeat(45) + '</main>');
       return;
@@ -225,6 +235,26 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   assert.ok(shallow.truncationReasons.includes('depth'));
   assert.equal(shallow.limits.depth, 1);
   await call('browser_tabs', { action: 'close', tabId: deep.tabId });
+  const custom = await call('browser_tabs', { action: 'new', url: fixture + 'custom' });
+  const radio = (await call('browser_find', { tabId: custom.tabId, query: 'No Option' })).matches[0];
+  assert.equal(radio?.role, 'radio', 'a label around a hidden radio is actionable, and find accepts query');
+  assert.equal((await call('browser_fill', { tabId: custom.tabId, ref: radio.ref, value: true })).checked, true);
+  assert.equal((await call('browser_wait', { tabId: custom.tabId, text: 'Picked no' })).met, true);
+  const select = (await call('browser_find', { tabId: custom.tabId, text: 'Billing account' })).matches.find(n => n.role === 'combobox');
+  assert.ok(select, 'a custom select is named by aria-labelledby'); assert.equal(select.expanded, false);
+  await call('browser_click', { tabId: custom.tabId, ref: select.ref });
+  assert.equal((await call('browser_wait', { tabId: custom.tabId, text: 'No items to display' })).met, true);
+  const viewer = await call('browser_text', { tabId: custom.tabId });
+  assert.equal(viewer.scope, 'dialog'); assert.match(viewer.text, /Letter page two/); assert.doesNotMatch(viewer.text, /Underlying email/);
+  assert.match((await call('browser_text', { tabId: custom.tabId, scope: 'page' })).text, /Underlying email/);
+  assert.match((await call('browser_text', { tabId: custom.tabId, selector: '[role=dialog]' })).text, /Letter page one/);
+  const framed = await call('browser_wait', { tabId: custom.tabId, text: 'Ending balance' });
+  assert.equal(framed.met, true, 'waits search frames'); assert.ok(framed.frameId > 0);
+  assert.doesNotMatch((await call('browser_snapshot', { tabId: custom.tabId, frames: false })).text, /Ending balance/);
+  assert.match((await call('browser_snapshot', { tabId: custom.tabId, selector: '[role=dialog]' })).text, /Letter page one/);
+  const expectRaw = await client.callTool({ name: 'browser_navigate', arguments: { tabId: custom.tabId, url: fixture + 'custom', expect: 'Ending balance', read: 'text' } });
+  assert.equal(expectRaw.isError, undefined); assert.equal(JSON.parse(expectRaw.content[1].text).met, true);
+  await call('browser_tabs', { action: 'close', tabId: custom.tabId });
   second = new Client({ name: 'second-client', version: '1.0' }); await second.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('bin/lateef.mjs'), 'mcp'], env: { ...process.env, LATEEF_STATE_DIR: join(directory, 'state') } }));
   const isolated = parse(await second.callTool({ name: 'browser_tabs', arguments: { action: 'list' } })); assert.deepEqual(isolated.tabs, []);
   const blocked = await second.callTool({ name: 'browser_snapshot', arguments: { tabId: tab.tabId } }); assert.equal(blocked.isError, true); assert.match(blocked.content[0].text, /TAB_NOT_SHARED/);
@@ -256,7 +286,7 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   await until(() => sentinel.evaluate(() => !document.querySelector('lateef-presence')));
   assert.equal(await worker.evaluate(() => chrome.action.getBadgeText({})), '');
   assert.equal(await worker.evaluate(id => chrome.tabs.get(id).then(() => true, () => false), linked.opened.tabId), false, 'agent-created link tab is cleaned up');
-  const report = { mcpTools: tools.tools.map(tool => tool.name), backgroundStateBefore: before, backgroundStateAfter: after, formPassed: true, fileUploadExactBytesPassed: true, uploadOriginGuardPassed: true, deepGridRowsCaptured: true, nestedRowButtonsCaptured: true, truncationReported: true, targetBlankStayedInBackground: true, spaTargetBlankRoutedInPlace: true, passwordRedacted: true, staleReferencesRejected: true, sessionIsolationPassed: true, closedWindowRefused: true, sharedTabProtected: true, sessionCleanupPassed: true, productScreenshotsTaken: 0, developmentScreenshotsTaken: 1, errors };
+  const report = { mcpTools: tools.tools.map(tool => tool.name), backgroundStateBefore: before, backgroundStateAfter: after, formPassed: true, fileUploadExactBytesPassed: true, uploadOriginGuardPassed: true, deepGridRowsCaptured: true, customControlsCaptured: true, dialogScopedText: true, frameWaits: true, nestedRowButtonsCaptured: true, truncationReported: true, targetBlankStayedInBackground: true, spaTargetBlankRoutedInPlace: true, passwordRedacted: true, staleReferencesRejected: true, sessionIsolationPassed: true, closedWindowRefused: true, sharedTabProtected: true, sessionCleanupPassed: true, productScreenshotsTaken: 0, developmentScreenshotsTaken: 1, errors };
   await writeFile(resolve('artifacts/browser-validation.json'), JSON.stringify(report, null, 2));
   assert.deepEqual(errors, []);
 });

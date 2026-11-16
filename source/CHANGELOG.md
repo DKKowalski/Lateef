@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0-beta.6
+
+Upgrading: close your AI client, run `npx lateef@latest stop`, re-run the install command for your client, run `npx lateef@latest extension` and reload the extension in Chrome. Update both together: a beta 6 extension will not connect to an older companion. A beta 6 companion still accepts older extensions.
+
+Fixes from the Gmail and Google Cloud billing field report (15 November 2026):
+
+- Custom controls get references. A `<label>` around a hidden radio or checkbox stands in for it, and elements with ARIA roles such as radio, checkbox, switch, combobox, option, menuitem and tab are actionable. Names follow aria-labelledby before aria-label. Snapshots show checked, expanded/collapsed and a custom select's current choice. `browser_fill` with true/false sets custom radios, checkboxes and switches.
+- `browser_text` reads an open modal or large dialog (such as an attachment viewer) instead of the page underneath, and says which it read (`scope`). `scope: "page"` reads everything; `selector` reads one element.
+- `browser_snapshot`, `browser_find` and `browser_wait` take `selector` to read inside one element, and `frames: false` to skip iframes such as chat widgets.
+- `browser_wait` looks in every frame, and returns the current title and URL.
+- `browser_navigate` and `browser_tabs` action:"new" take `expect`: text the new view shows. They wait up to 10 seconds for it before returning or reading, so an agent does not act on the previous view of a client-rendered app.
+- Downloads are attributed for 15 seconds after an action, up from 4, including downloads from links that open in a new tab.
+- `browser_find` accepts `query` as well as `text`.
+
+Security: the extension and the companion now prove the pairing to each other. Each side answers the other's fresh challenge with a proof derived from the token, so the token itself is no longer sent. Before pairing, the companion must prove it issued the pairing code before the extension sends it. A program squatting the port can no longer capture a token or a pairing.
+
 ## 0.2.0-beta.5
 
 Upgrading: close your AI client, run `npx lateef@latest stop`, and re-run the install command for your client. The extension is unchanged from beta 4.

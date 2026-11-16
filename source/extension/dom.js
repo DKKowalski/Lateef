@@ -3,11 +3,25 @@
 export function domCommand(method, params) {
   try {
   const state = globalThis.__quietChrome ??= { refs: new Map(), counter: 0 };
-  const label = el => el.getAttribute('aria-label') ||
-    (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim() ||
+  // Accessible name, in the order a screen reader uses: aria-labelledby, aria-label, <label>, then content.
+  const label = el => (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim() ||
+    el.getAttribute('aria-label') ||
     [...(el.labels || [])].map(label => label.innerText).join(' ') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || '';
   const visible = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
-  const role = el => el.getAttribute('role') || ({ BUTTON: 'button', A: 'link', INPUT: ({ checkbox: 'checkbox', radio: 'radio', submit: 'button', button: 'button', reset: 'button', image: 'button' })[el.type] || 'textbox', TEXTAREA: 'textbox', SELECT: 'combobox' }[el.tagName]) || el.tagName.toLowerCase();
+  // Custom controls: a <label> whose own radio or checkbox is visually hidden is the thing a person clicks, so it stands in for it.
+  const hiddenControl = el => el.tagName === 'LABEL' && el.control?.matches('input[type=checkbox],input[type=radio]') && !visible(el.control) ? el.control : null;
+  const ROLES = 'button,link,checkbox,radio,switch,combobox,listbox,option,menuitem,menuitemcheckbox,menuitemradio,tab,treeitem,textbox,searchbox,slider,spinbutton,row,gridcell,cell'.split(',');
+  const INTERACTIVE = 'button,a[href],input:not([type=hidden]),textarea,select,[contenteditable=true],label,' + ROLES.map(r => `[role=${r}]`).join(',');
+  const ariaToggle = el => ['checkbox', 'radio', 'switch', 'menuitemcheckbox', 'menuitemradio', 'option', 'tab'].includes(el.getAttribute('role')) && !el.matches('input');
+  const role = el => el.getAttribute('role') || (hiddenControl(el) ? hiddenControl(el).type : '') || ({ BUTTON: 'button', A: 'link', INPUT: ({ checkbox: 'checkbox', radio: 'radio', submit: 'button', button: 'button', reset: 'button', image: 'button' })[el.type] || 'textbox', TEXTAREA: 'textbox', SELECT: 'combobox' }[el.tagName]) || el.tagName.toLowerCase();
+  // selector: read only inside the first element that matches (a dialog, form or panel). Missing means "not in this frame".
+  const scopeRoot = () => { if (!params.selector) return document.body; try { return document.querySelector(params.selector); } catch { throw new Error('BAD_SELECTOR: selector is not valid CSS'); } };
+  // An open modal or a large dialog sits over the page; it is what a person is reading.
+  const activeDialog = () => [...document.querySelectorAll('dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]')].reverse().find(el => {
+    if (!visible(el) || !String(el.innerText || '').trim()) return false;
+    let modal = el.getAttribute('aria-modal') === 'true' || el.getAttribute('role') === 'alertdialog'; try { modal ||= el.matches(':modal'); } catch {}
+    const box = el.getBoundingClientRect(); return modal || box.width * box.height > innerWidth * innerHeight * .4;
+  });
   const compact = text => text.replace(/\s+/g, ' ').trim().slice(0, 200);
   const snapshot = () => {
     state.refs.clear(); state.counter = 0;
@@ -29,7 +43,7 @@ export function domCommand(method, params) {
         if (length >= max) { reasons.add('maxChars'); return; }
         if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(el.tagName) || el.hidden || getComputedStyle(el).display === 'none') continue;
         const shown = visible(el);
-        const interactive = shown && el.matches('button,a[href],input:not([type=hidden]),textarea,select,[role=button],[role=link],[role=row],[role=gridcell],[role=cell],[contenteditable=true]');
+        const interactive = shown && el.matches(INTERACTIVE) && (el.tagName !== 'LABEL' || !!hiddenControl(el));
         const textElement = shown && el.matches('h1,h2,h3,h4,h5,h6,p,li,summary,output,td,th');
         const semantic = interactive || textElement;
         // Layout wrappers do not consume semantic depth. Traverse wrappers
@@ -37,15 +51,22 @@ export function domCommand(method, params) {
         if (semantic && depth > depthLimit) { reasons.add('depth'); continue; }
         if (interactive) {
           const ref = 'e' + generation + '_' + ++state.counter; state.refs.set(ref, el);
-          const name = compact(label(el));
-          const toggle = el.matches('input[type=checkbox],input[type=radio]');
+          // A label standing in for a hidden control takes its name the way a screen reader would: from a named child first.
+          const name = compact(hiddenControl(el) ? el.querySelector('[aria-label]')?.getAttribute('aria-label') || el.innerText || '' : label(el));
+          const control = hiddenControl(el), aria = ariaToggle(el);
+          const toggle = el.matches('input[type=checkbox],input[type=radio]') || !!control || aria;
+          const checked = control ? control.checked : aria ? el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true' : el.checked;
+          const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true' || !!control?.disabled;
+          // A custom select shows its current choice as its own text, which is otherwise lost under its label's name.
+          const shownValue = el.getAttribute('role') === 'combobox' && !el.matches('input,select') ? compact(el.innerText || '') : '';
           const value = el.matches('input[type=password]') ? '[redacted]' : toggle || el.matches('input[type=submit],input[type=button],input[type=reset]') ? undefined : el.matches('input,textarea,select') ? String(el.value).slice(0, 120)
             // An editor's contents are its value, so a fill can be checked before anything is submitted.
-            : el.matches('[contenteditable=true]') ? String(el.innerText || '').slice(0, 2000) : undefined;
+            : el.matches('[contenteditable=true]') ? String(el.innerText || '').slice(0, 2000) : shownValue && shownValue !== name ? shownValue : undefined;
           const link = el.closest('a[href]');
-          const item = { ref, role: role(el), name, ...(link ? { href: link.href, target: link.getAttribute('target') || document.querySelector('base')?.target || '_self' } : {}), ...(value !== undefined ? { value } : {}), ...(toggle ? { checked: el.checked } : {}), disabled: !!el.disabled };
+          const expanded = el.getAttribute('aria-expanded');
+          const item = { ref, role: role(el), name, ...(link ? { href: link.href, target: link.getAttribute('target') || document.querySelector('base')?.target || '_self' } : {}), ...(value !== undefined ? { value } : {}), ...(toggle ? { checked } : {}), ...(expanded ? { expanded: expanded === 'true' } : {}), disabled };
           nodes.push(item); dropEcho(name);
-          addLine(`${item.role} ${JSON.stringify(name)} [${ref}]${value ? ' value=' + JSON.stringify(value) : ''}${toggle && el.checked ? ' checked' : ''}${el.disabled ? ' disabled' : ''}${link ? ' href=' + JSON.stringify(item.href.startsWith(location.origin + '/') ? item.href.slice(location.origin.length) : item.href) + (item.target.toLowerCase() === '_self' ? '' : ' target=' + JSON.stringify(item.target)) : ''}`);
+          addLine(`${item.role} ${JSON.stringify(name)} [${ref}]${value ? ' value=' + JSON.stringify(value) : ''}${toggle && checked ? ' checked' : ''}${expanded ? (expanded === 'true' ? ' expanded' : ' collapsed') : ''}${disabled ? ' disabled' : ''}${link ? ' href=' + JSON.stringify(item.href.startsWith(location.origin + '/') ? item.href.slice(location.origin.length) : item.href) + (item.target.toLowerCase() === '_self' ? '' : ' target=' + JSON.stringify(item.target)) : ''}`);
         } else if (textElement && el.childElementCount < 4) {
           const text = compact(el.innerText || el.textContent || '');
           addText(el.tagName.toLowerCase(), text);
@@ -54,12 +75,13 @@ export function domCommand(method, params) {
           addText('text', text);
         }
         // Rows can contain buttons, links and cells; do not stop at their ref.
-        if (!interactive || el.matches('[role=row],[role=gridcell],[role=cell]')) walk(el, depth + (semantic ? 1 : 0));
+        if (!interactive || el.matches('[role=row],[role=gridcell],[role=cell],[role=listbox],[role=tab],[role=treeitem]')) walk(el, depth + (semantic ? 1 : 0));
         if (el.shadowRoot) walk(el.shadowRoot, depth + (semantic ? 1 : 0));
       }
     }
-    walk(document.body, 0);
-    for (const input of document.querySelectorAll('input[type=file]')) {
+    const root = scopeRoot(); if (!root) return { title: document.title, url: location.href, nodes: [], text: '', truncated: false, truncationReasons: [], limits: { maxChars: max, depth: depthLimit, maxNodes: 300, maxScannedElements: 20000 }, selectorMissing: true };
+    walk(root, 0);
+    for (const input of root.querySelectorAll('input[type=file]')) {
       if (nodes.length >= 300 || length >= max) { reasons.add('nodeLimit'); break; }
       if ([...state.refs.values()].includes(input)) continue;
       const ref = 'e' + generation + '_' + ++state.counter; state.refs.set(ref, input);
@@ -85,9 +107,18 @@ export function domCommand(method, params) {
   if (method === 'text') {
     // The readable text of the page, for when the content matters and the controls do not. Cheaper than a snapshot.
     const max = Math.min(Math.max(params.maxChars || 12000, 500), 50000);
-    const source = document.querySelector('main,article,[role=main]') || document.body;
+    let source, scope;
+    if (params.selector) { source = scopeRoot(); scope = 'selector'; if (!source) throw new Error(`NO_SELECTOR_MATCH: nothing matches ${params.selector}`); }
+    else if (params.scope === 'page') { source = document.body; scope = 'page'; }
+    else if ((source = activeDialog())) scope = 'dialog';
+    else if ((source = document.querySelector('main,article,[role=main]'))) scope = 'main';
+    else { source = document.body; scope = 'page'; }
     const text = String(source.innerText || '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    return { title: document.title, url: location.href, text: text.slice(0, max), truncated: text.length > max, totalChars: text.length };
+    return { title: document.title, url: location.href, scope, ...(scope === 'dialog' ? { dialog: compact(label(source)).slice(0, 80) } : {}), text: text.slice(0, max), truncated: text.length > max, totalChars: text.length };
+  }
+  if (method === 'has') {
+    const root = scopeRoot(), text = String(params.text).toLowerCase();
+    return { present: !!root && String(root.innerText || '').toLowerCase().includes(text) };
   }
   if (method === 'wait') {
     // Wait in the page for text to appear (or go), so the client does not have to poll with snapshots.
@@ -180,9 +211,12 @@ export function domCommand(method, params) {
   }
   if (method === 'fill') {
     if (el.matches('input[type=file],input[type=password]')) throw new Error('SENSITIVE_INPUT: file and password inputs are not supported in this MVP');
-    if (el.matches('input[type=checkbox],input[type=radio]')) {
-      if (typeof params.value !== 'boolean') throw new Error('Checkbox value must be boolean');
-      if (el.checked !== params.value) el.click();
+    const control = hiddenControl(el);
+    if (el.matches('input[type=checkbox],input[type=radio]') || control || ariaToggle(el)) {
+      if (typeof params.value !== 'boolean') throw new Error('BAD_VALUE: a checkbox, radio or switch takes true or false');
+      const now = () => control ? control.checked : el.matches('input') ? el.checked : el.getAttribute('aria-checked') === 'true' || el.getAttribute('aria-selected') === 'true';
+      if (now() !== params.value) el.click();
+      return { filled: params.ref, checked: now() };
     } else if (el.matches('input,textarea,select')) {
       const proto = el.tagName === 'INPUT' ? HTMLInputElement.prototype : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLSelectElement.prototype;
       Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, String(params.value));

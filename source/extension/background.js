@@ -7,6 +7,13 @@ let work = Promise.resolve();
 function enqueue(fn) { work = work.catch(() => {}).then(fn); return work; }
 const metadata = tab => ({ tabId: tab.id, windowId: tab.windowId, title: tab.title, url: tab.url });
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+const hex = bytes => [...new Uint8Array(bytes)].map(b => b.toString(16).padStart(2, '0')).join('');
+const nonce = () => hex(crypto.getRandomValues(new Uint8Array(32)));
+const sha256 = async text => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+async function hmac(key, ...parts) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return hex(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode(parts.join('\n'))));
+}
 async function settings() { return (await chrome.storage.local.get('connection')).connection; }
 async function ownership() { return (await chrome.storage.session.get('ownership')).ownership || {}; }
 async function saveOwnership(value) { await chrome.storage.session.set({ ownership: value }); badge(value); }
@@ -57,10 +64,11 @@ async function owned(sessionId, tabId) {
   if (tab.windowId !== window.id) fail('WINDOW_CHANGED', 'This tab is outside the selected window.');
   return tab;
 }
-// Downloads: Chrome does not say which tab started a download, so one that begins within a few seconds of a session's
-// click, key press or navigation is attributed to that session. A session can list only those.
+// Downloads: Chrome does not say which tab started a download, so one that begins soon after a session's click, key
+// press or navigation is attributed to that session. Sites such as Gmail prepare the file first or go through a redirect
+// tab, so the window is fifteen seconds. A session can list only those.
 let downloadWatch = null;
-function watchDownloads(sessionId) { if (chrome.downloads) downloadWatch = { sessionId, until: Date.now() + 4000 }; }
+function watchDownloads(sessionId) { if (chrome.downloads) downloadWatch = { sessionId, until: Date.now() + 15000 }; }
 chrome.downloads?.onCreated.addListener(async item => {
   const watch = downloadWatch; if (!watch || Date.now() > watch.until) return;
   const store = (await chrome.storage.session.get('downloads')).downloads || {};
@@ -177,11 +185,12 @@ async function fullCommand(tab, method, params) {
 // Snapshots and finds read every frame of the tab. The top document comes first; each iframe that has anything in it
 // follows under a "frame" line, with its references prefixed so that a later action is sent to the right frame.
 async function readFrames(tabId, method, params) {
-  const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, world: 'ISOLATED', func: domCommand, args: [method, params] });
+  const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: params.frames !== false }, world: 'ISOLATED', func: domCommand, args: [method, params] });
   const top = results.find(entry => entry.frameId === 0)?.result;
   if (top?.__quietError) fail(top.__quietError.code, top.__quietError.message);
   if (top === undefined) fail('DOM_NO_RESULT', 'The page did not return a DOM result. It may have navigated.');
-  const frames = results.filter(entry => entry.frameId !== 0 && entry.result && !entry.result.__quietError).slice(0, 12);
+  const frames = results.filter(entry => entry.frameId !== 0 && entry.result && !entry.result.__quietError && !entry.result.selectorMissing).slice(0, 12);
+  if (top.selectorMissing && !frames.length) fail('NO_SELECTOR_MATCH', `Nothing on the page matches ${params.selector}.`);
   const tag = (frameId, node) => ({ ...node, ref: `f${frameId}.${node.ref}`, frameId });
   if (method === 'find') {
     const limit = Math.min(params.limit || 20, 50);
@@ -198,6 +207,20 @@ async function readFrames(tabId, method, params) {
   }
   if (text.length > top.limits.maxChars) { text = text.slice(0, top.limits.maxChars); reasons.add('maxChars'); }
   return { ...top, text, truncated: reasons.size > 0, truncationReasons: [...reasons] };
+}
+// Waits look in every frame (a payments or editor iframe is often where the text lands), checking from here so one
+// slow frame cannot hold the others. The result names the page it was met on, so a stale client-rendered view shows.
+async function waitFrames(tabId, params) {
+  const limit = Math.min(Math.max(params.timeoutMs || 5000, 100), 10000), start = Date.now(), gone = params.gone === true;
+  for (;;) {
+    const results = await chrome.scripting.executeScript({ target: { tabId, allFrames: params.frames !== false }, world: 'ISOLATED', func: domCommand, args: ['has', params] }).catch(() => []);
+    const hits = results.filter(entry => entry.result?.present), met = gone ? !hits.length && results.length > 0 : hits.length > 0;
+    if (met || Date.now() - start >= limit) {
+      const tab = await chrome.tabs.get(tabId);
+      return { met, waitedMs: Date.now() - start, title: tab.title, url: tab.url, ...(met && !gone && hits[0].frameId ? { frameId: hits[0].frameId } : {}) };
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
 }
 async function dispatch(sessionId, method, params) {
   const records = await ownership();
@@ -266,6 +289,7 @@ async function dispatch(sessionId, method, params) {
   await presence(tab.id, params.ref && !framed ? 'point' : 'note', { method, ref: params.ref, shared: !records[tab.id].created });
   if (method === 'click' || method === 'press') watchDownloads(sessionId);
   if (method === 'snapshot' || method === 'find') return readFrames(tab.id, method, params);
+  if (method === 'wait') return waitFrames(tab.id, params);
   if (method === 'upload' && Array.isArray(params.files)) {
     // Files over about a megabyte go to the page in pieces first; the upload then refers to them by key.
     const files = [];
@@ -283,6 +307,7 @@ async function dispatch(sessionId, method, params) {
   if (result === undefined) fail('DOM_NO_RESULT', 'The page did not return a DOM result. It may have navigated.');
   if (method === 'click' && result.openUrl) {
     if (!urlAllowed(result.openUrl)) fail('URL_BLOCKED', 'Only http(s) links can open a background tab.');
+    watchDownloads(sessionId); // a download link opened in a new tab
     const opened = await chrome.tabs.create({ windowId: window.id, active: false, url: result.openUrl });
     records[opened.id] = { sessionId, created: true }; await saveOwnership(records); await group(opened);
     return { opened: await loaded(opened.id) };
@@ -300,9 +325,16 @@ async function connect() {
     clearInterval(heartbeat);
     const connection = new WebSocket(`ws://127.0.0.1:${config.port}/extension`);
     socket = connection;
-    connection.onopen = () => connection.send(JSON.stringify({ type: 'hello', pairId: config.pairId, token: config.token, windowId: config.windowId, version: chrome.runtime.getManifest().version, capabilities: ['snapshot-v2', 'link-destinations', 'upload', 'presence', 'frames', 'page-tools', 'history', 'large-uploads', ...(chrome.downloads ? ['downloads'] : []), ...(chrome.debugger ? ['full-control'] : [])] }));
+    // The broker must prove it holds this pairing before Lateef accepts a command from it; the token is never sent.
+    const mine = nonce(), key = sha256(config.token); let verified = false;
+    connection.onopen = () => connection.send(JSON.stringify({ type: 'hello', pairId: config.pairId, nonce: mine, windowId: config.windowId, version: chrome.runtime.getManifest().version, capabilities: ['snapshot-v2', 'link-destinations', 'upload', 'presence', 'frames', 'page-tools', 'history', 'large-uploads', ...(chrome.downloads ? ['downloads'] : []), ...(chrome.debugger ? ['full-control'] : [])] }));
     connection.onmessage = async event => {
       let msg; try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === 'challenge') {
+        if (typeof msg.nonce !== 'string' || msg.proof !== await hmac(await key, 'lateef-broker', mine, msg.nonce)) { status = 'Broker not verified'; connection.close(); return; }
+        verified = true; connection.send(JSON.stringify({ type: 'auth', proof: await hmac(await key, 'lateef-extension', msg.nonce, mine) })); return;
+      }
+      if (!verified) { status = 'Broker not verified'; connection.close(); return; }
       if (msg.type === 'ready') { status = 'Connected'; backoff = 1000; return; }
       if (msg.type === 'sessions') {
         sessions = msg.sessions;
@@ -330,7 +362,7 @@ async function connect() {
     };
     connection.onclose = event => {
       if (socket !== connection) return;
-      status = 'Disconnected'; clearInterval(heartbeat);
+      if (status !== 'Broker not verified') status = 'Disconnected'; clearInterval(heartbeat);
       if (event.code === 1008 && /^Revoked/.test(event.reason)) { // Pairing revoked: stop retrying; the popup then shows not paired.
         socket = null; sessions = []; status = 'Not paired'; chrome.alarms.clear('reconnect'); chrome.storage.local.remove('connection'); return;
       }
@@ -357,7 +389,12 @@ async function popupMessage(msg) {
   if (msg.type === 'pair') {
     if (!Number.isInteger(msg.port) || msg.port < 1 || msg.port > 65535 || !Number.isInteger(msg.windowId)) fail('BAD_SETUP', 'Invalid port or window.');
     await chrome.windows.get(msg.windowId);
-    const res = await fetch(`http://127.0.0.1:${msg.port}/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: msg.code, name: msg.name }) });
+    const url = `http://127.0.0.1:${msg.port}/pair`, post = body => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    // The code is shown only by the real broker, so it must prove it knows the code before the code is sent to it.
+    const challenge = nonce(), check = await post({ nonce: challenge });
+    if (!check.ok) fail('PAIR_FAILED', 'No pairing code is waiting on that port. Run lateef pair and try again.');
+    if ((await check.json()).proof !== await hmac(await sha256(String(msg.code).trim()), 'lateef-pair', challenge)) fail('PAIR_FAILED', 'The program on that port did not issue this code. Check the port that lateef pair printed.');
+    const res = await post({ code: String(msg.code).trim(), name: msg.name });
     if (!res.ok) fail('PAIR_FAILED', 'Pairing code was invalid or expired. Generate a new one.');
     const pair = await res.json();
     socket?.close();

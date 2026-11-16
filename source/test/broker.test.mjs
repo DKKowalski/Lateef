@@ -109,3 +109,26 @@ test('commands carry an absolute deadline near now plus the broker timeout', asy
   const msg = await seen; await call;
   assert.equal(typeof msg.deadline, 'number'); assert.ok(msg.deadline >= before + 400 && msg.deadline <= Date.now() + 400);
 });
+test('broker and extension prove the pairing to each other without sending the token', async t => {
+  const { proof } = await import('../src/broker.mjs');
+  const { digest } = await import('../src/state.mjs');
+  const { broker, base } = await fixture(t);
+  const code = broker.issueCode(), nonce = 'ab'.repeat(16);
+  // Pairing step one: the broker shows it issued the code before the extension sends it.
+  const check = await (await fetch(base + '/pair', { method: 'POST', headers: { origin, 'content-type': 'application/json' }, body: JSON.stringify({ nonce }) })).json();
+  assert.equal(check.proof, proof(digest(code), 'lateef-pair', nonce));
+  const { credentials } = await pair(broker, base, code), key = digest(credentials.token);
+  const socket = new WebSocket(`ws://127.0.0.1:${broker.port}/extension`, { origin }); t.after(() => socket.terminate()); await once(socket, 'open');
+  const next = () => once(socket, 'message').then(([raw]) => JSON.parse(raw));
+  let reply = next(); socket.send(JSON.stringify({ type: 'hello', pairId: credentials.pairId, nonce, windowId: 7 }));
+  const challenge = await reply;
+  assert.equal(challenge.type, 'challenge'); assert.equal(challenge.proof, proof(key, 'lateef-broker', nonce, challenge.nonce));
+  reply = next(); socket.send(JSON.stringify({ type: 'auth', proof: proof(key, 'lateef-extension', challenge.nonce, nonce) }));
+  assert.equal((await reply).type, 'ready');
+  assert.equal((await request(broker.state, '/status')).connected, true);
+  // A wrong proof is refused.
+  const bad = new WebSocket(`ws://127.0.0.1:${broker.port}/extension`, { origin }); await once(bad, 'open');
+  const first = once(bad, 'message'); bad.send(JSON.stringify({ type: 'hello', pairId: credentials.pairId, nonce, windowId: 7 })); await first;
+  const closed = once(bad, 'close'); bad.send(JSON.stringify({ type: 'auth', proof: 'f'.repeat(64) }));
+  assert.equal((await closed)[0], 1008);
+});

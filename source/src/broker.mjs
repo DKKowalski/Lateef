@@ -1,10 +1,14 @@
 import { VERSION, PROTOCOL } from './version.mjs';
 import { createServer } from 'node:http';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes, createHmac } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadState, equal, digest, secret } from './state.mjs';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+// Both sides hold sha256(token): the broker stores it, the extension derives it. Each proves it to the other with an
+// HMAC over the other side's fresh nonce, so the token itself never crosses the socket and an impostor on the port learns nothing.
+export const proof = (key, ...parts) => createHmac('sha256', key).update(parts.join('\n')).digest('hex');
+const nonceOK = value => typeof value === 'string' && /^[0-9a-f]{32,128}$/.test(value);
 
 export class Broker {
   constructor(storage, options = {}) {
@@ -53,6 +57,11 @@ export class Broker {
       if (req.method === 'POST' && req.url === '/pair') {
         if (!this.extensionOrigin(origin)) return this.json(res, 403, { error: 'Pair from the extension' });
         const body = await this.body(req);
+        // Step one, from current extensions: show that this broker issued the pending code, before the code is sent.
+        if (body.code === undefined && nonceOK(body.nonce)) {
+          if (!this.pairing || Date.now() > this.pairing.expires) return this.json(res, 403, { error: 'No pairing code is waiting. Run lateef pair.' }, origin);
+          return this.json(res, 200, { proof: proof(this.pairing.hash, 'lateef-pair', body.nonce) }, origin);
+        }
         if (typeof body.code !== 'string' || !this.pairing || Date.now() > this.pairing.expires || !equal(digest(body.code), this.pairing.hash)) return this.json(res, 403, { error: 'Invalid or expired pairing code' }, origin);
         this.pairing = null;
         const token = secret(), pairId = randomUUID();
@@ -109,7 +118,7 @@ export class Broker {
     for (const extension of this.extensions.values()) if (extension.socket.readyState === WebSocket.OPEN) extension.socket.send(JSON.stringify({ type: 'sessions', sessions: this.status().sessions }));
   }
   connected(socket, origin) {
-    let extension;
+    let extension, challenge;
     socket.on('error', () => socket.terminate());
     const timer = setTimeout(() => socket.close(1008, 'Authentication required'), 5000);
     const onMessage = async raw => {
@@ -117,8 +126,20 @@ export class Broker {
       try { msg = JSON.parse(raw); } catch { socket.close(1008, 'Invalid JSON'); return; }
       if (!isObject(msg)) { socket.close(1008, 'Invalid message'); return; }
       if (!extension) {
-        const pair = this.state.pairs.find(x => x.id === msg.pairId && x.origin === origin);
-        if (msg.type !== 'hello' || typeof msg.token !== 'string' || !pair || !equal(pair.tokenHash, digest(msg.token)) || !Number.isInteger(msg.windowId)) return socket.close(1008, 'Authentication failed');
+        if (challenge) {
+          if (msg.type !== 'auth' || !equal(msg.proof, proof(challenge.pair.tokenHash, 'lateef-extension', challenge.broker, challenge.hello.nonce))) return socket.close(1008, 'Authentication failed');
+          msg = challenge.hello;
+        } else {
+          const pair = this.state.pairs.find(x => x.id === msg.pairId && x.origin === origin);
+          if (msg.type !== 'hello' || !pair || !Number.isInteger(msg.windowId)) return socket.close(1008, 'Authentication failed');
+          if (nonceOK(msg.nonce) && msg.token === undefined) {
+            challenge = { pair, hello: msg, broker: randomBytes(32).toString('hex') };
+            socket.send(JSON.stringify({ type: 'challenge', nonce: challenge.broker, proof: proof(pair.tokenHash, 'lateef-broker', msg.nonce, challenge.broker) })); return;
+          }
+          // Extensions before 0.2.0-beta.6 send the token itself.
+          if (typeof msg.token !== 'string' || !equal(pair.tokenHash, digest(msg.token))) return socket.close(1008, 'Authentication failed');
+        }
+        const pair = challenge?.pair ?? this.state.pairs.find(x => x.id === msg.pairId && x.origin === origin);
         clearTimeout(timer);
         this.extensions.get(pair.id)?.socket.close(1000, 'New connection');
         extension = { pair, socket, windowId: msg.windowId, version: typeof msg.version === 'string' ? msg.version.slice(0, 40) : 'legacy', capabilities: Array.isArray(msg.capabilities) ? msg.capabilities.filter(x => typeof x === 'string').slice(0, 20) : [] }; this.extensions.set(pair.id, extension);
