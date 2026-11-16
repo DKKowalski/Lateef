@@ -23,6 +23,7 @@ export function domCommand(method, params) {
     const box = el.getBoundingClientRect(); return modal || box.width * box.height > innerWidth * innerHeight * .4;
   });
   const compact = text => text.replace(/\s+/g, ' ').trim().slice(0, 200);
+  const finding = method === 'find', needle = String(params.text || '').toLowerCase();
   const snapshot = () => {
     state.refs.clear(); state.counter = 0;
     const generation = Math.random().toString(36).slice(2, 5).padEnd(3, '0'); // short: every reference is paid for in tokens
@@ -39,8 +40,10 @@ export function domCommand(method, params) {
     function walk(parent, depth) {
       for (const el of parent.children || []) {
         if (++visited > 20000) { reasons.add('scanLimit'); return; }
-        if (nodes.length >= 300) { reasons.add('nodeLimit'); return; }
-        if (length >= max) { reasons.add('maxChars'); return; }
+        // A find keeps only its matches, so it searches the whole page instead of stopping where a snapshot would.
+        if (!finding && nodes.length >= 300) { reasons.add('nodeLimit'); return; }
+        if (!finding && length >= max) { reasons.add('maxChars'); return; }
+        if (finding && nodes.length >= 50) return;
         if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(el.tagName) || el.hidden || getComputedStyle(el).display === 'none') continue;
         const shown = visible(el);
         const interactive = shown && el.matches(INTERACTIVE) && (el.tagName !== 'LABEL' || !!hiddenControl(el));
@@ -65,7 +68,9 @@ export function domCommand(method, params) {
           const link = el.closest('a[href]');
           const expanded = el.getAttribute('aria-expanded');
           const item = { ref, role: role(el), name, ...(link ? { href: link.href, target: link.getAttribute('target') || document.querySelector('base')?.target || '_self' } : {}), ...(value !== undefined ? { value } : {}), ...(toggle ? { checked } : {}), ...(expanded ? { expanded: expanded === 'true' } : {}), disabled };
-          nodes.push(item); dropEcho(name);
+          if (finding && !name.toLowerCase().includes(needle)) { state.counter--; state.refs.delete(ref); }
+          else { nodes.push(item); dropEcho(name); }
+          if (finding) { if (!interactive || el.matches('[role=row],[role=gridcell],[role=cell],[role=listbox],[role=tab],[role=treeitem]')) walk(el, depth + 1); if (el.shadowRoot) walk(el.shadowRoot, depth + 1); continue; }
           addLine(`${item.role} ${JSON.stringify(name)} [${ref}]${value ? ' value=' + JSON.stringify(value) : ''}${toggle && checked ? ' checked' : ''}${expanded ? (expanded === 'true' ? ' expanded' : ' collapsed') : ''}${disabled ? ' disabled' : ''}${link ? ' href=' + JSON.stringify(item.href.startsWith(location.origin + '/') ? item.href.slice(location.origin.length) : item.href) + (item.target.toLowerCase() === '_self' ? '' : ' target=' + JSON.stringify(item.target)) : ''}`);
         } else if (textElement && el.childElementCount < 4) {
           const text = compact(el.innerText || el.textContent || '');
@@ -137,6 +142,12 @@ export function domCommand(method, params) {
   if (!el || !el.isConnected) throw new Error('STALE_REFERENCE: get a fresh snapshot');
   if (method === 'scroll') { el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); return { scrolledTo: params.ref, scrollY: Math.round((document.scrollingElement || document.documentElement).scrollTop) }; }
   if ((!visible(el) && !(method === 'upload' && el.matches('input[type=file]'))) || el.disabled) throw new Error('ELEMENT_UNAVAILABLE: element is hidden or disabled');
+  if (method === 'locate') {
+    // Where a real pointer should land: the element's centre, brought on screen first, in CSS pixels of this frame.
+    let box = el.getBoundingClientRect();
+    if (box.bottom < 0 || box.top > innerHeight || box.right < 0 || box.left > innerWidth) { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); box = el.getBoundingClientRect(); }
+    return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+  }
   if (method === 'upload') {
     if (location.origin !== params.expectedOrigin) throw new Error('ORIGIN_MISMATCH: destination origin changed');
     if (!el.matches('input[type=file]')) throw new Error('NOT_FILE_INPUT: select a file input reference');
@@ -183,7 +194,14 @@ export function domCommand(method, params) {
     }
     const formTarget = el.form?.target;
     if (formTarget && !['_self', '_top', '_parent'].includes(formTarget.toLowerCase())) throw new Error('NEW_WINDOW_FORM: submitting into another window is unsupported');
-    el.click(); return { clicked: params.ref };
+    // Many apps act on pointerdown or mousedown, not click (Slack's sidebar, X's composer buttons), so send the whole
+    // press as a person's click would: over, down, up, then click. These are still DOM events, not trusted input.
+    const box = el.getBoundingClientRect(), at = { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true, cancelable: true, composed: true, view: window, button: 0 };
+    const pointer = (type, buttons) => el.dispatchEvent(new PointerEvent(type, { ...at, buttons, pointerId: 1, pointerType: 'mouse', isPrimary: true }));
+    pointer('pointerover', 0); el.dispatchEvent(new MouseEvent('mouseover', { ...at, buttons: 0 }));
+    pointer('pointerdown', 1); el.dispatchEvent(new MouseEvent('mousedown', { ...at, buttons: 1 }));
+    pointer('pointerup', 0); el.dispatchEvent(new MouseEvent('mouseup', { ...at, buttons: 0 }));
+    if (el.isConnected) el.click(); return { clicked: params.ref };
   }
   if (method === 'hover') {
     // Opens menus and tooltips that listen for the pointer. These are DOM events, not a real pointer.

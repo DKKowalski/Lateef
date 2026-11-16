@@ -169,14 +169,25 @@ async function fullCommand(tab, method, params) {
     const secret = (await cdp(tabId, 'Runtime.evaluate', { expression: 'document.activeElement?.matches?.("input[type=password]")===true', returnByValue: true })).result.value;
     if (secret) fail('SENSITIVE_INPUT', 'Password fields are not typed into. Ask the person to enter it.');
   }
-  if (action === 'type') { await cdp(tabId, 'Input.insertText', { text: String(params.text ?? '') }); return { typed: String(params.text ?? '').length }; }
+  if (action === 'type') {
+    // A line break is a key press, not text: Shift+Enter by default, which breaks the line in chat and post editors
+    // without sending. newline:"Enter" for editors that make paragraphs on Enter and never send on it.
+    const text = String(params.text ?? ''), lines = text.split('\n'), [code] = KEYS.Enter, shift = params.newline !== 'Enter' ? 8 : 0;
+    for (const [index, line] of lines.entries()) {
+      if (line) await cdp(tabId, 'Input.insertText', { text: line });
+      if (index < lines.length - 1) for (const type of ['rawKeyDown', 'char', 'keyUp']) await cdp(tabId, 'Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: code, modifiers: shift, ...(type === 'char' ? { text: '\r' } : {}) });
+    }
+    return { typed: text.length, lines: lines.length };
+  }
   if (action === 'key') {
     const parts = String(params.key || '').split('+'), key = parts.pop() || '+', names = { Alt: 1, Control: 2, Ctrl: 2, Meta: 4, Command: 4, Cmd: 4, Shift: 8 };
     let modifiers = 0; for (const part of parts) { if (!names[part]) fail('BAD_KEY', 'Unknown modifier ' + part); modifiers |= names[part]; }
     if (!KEYS[key] && key.length !== 1) fail('BAD_KEY', 'Use one character or Enter, Tab, Escape, Backspace, Delete, Home, End, PageUp, PageDown or an arrow key, optionally with Control+, Meta+, Alt+ or Shift+.');
     const [code, text] = KEYS[key] || [key.toUpperCase().charCodeAt(0), modifiers & ~8 ? undefined : key];
     const event = { key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code, modifiers, code: KEYS[key] ? (key === ' ' ? 'Space' : key) : /[a-z]/i.test(key) ? 'Key' + key.toUpperCase() : /\d/.test(key) ? 'Digit' + key : '' };
-    await cdp(tabId, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...event, ...(text ? { text } : {}) }); await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...event });
+    // Chrome on macOS does not turn simulated Meta+A into Select All; editing shortcuts need the command named.
+    const command = modifiers & 6 && !(modifiers & 1) ? { a: 'selectAll', c: 'copy', x: 'cut', v: 'paste', z: modifiers & 8 ? 'redo' : 'undo', y: 'redo' }[key.toLowerCase()] : undefined;
+    await cdp(tabId, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...event, ...(text ? { text } : {}), ...(command ? { commands: [command] } : {}) }); await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...event });
     return { key: params.key };
   }
   fail('BAD_INPUT', 'action must be click, double_click, right_click, move, drag, scroll, type or key.');
@@ -270,6 +281,14 @@ async function dispatch(sessionId, method, params) {
   }
   if (['screenshot', 'input', 'evaluate', 'console', 'network'].includes(method)) {
     await attach(tab.id);
+    // A reference instead of coordinates: aim at the element itself rather than at pixels read off a screenshot.
+    if (method === 'input' && params.ref) {
+      if (/^f\d+\./.test(params.ref)) fail('BAD_INPUT', 'Real input by reference works in the top document; for a frame, use coordinates from browser_screenshot.');
+      const [located] = await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, world: 'ISOLATED', func: domCommand, args: ['locate', { ref: params.ref }] });
+      const spot = located?.result; if (!spot || spot.__quietError) fail(spot?.__quietError?.code || 'DOM_NO_RESULT', spot?.__quietError?.message || 'The element could not be located.');
+      params = { ...params, x: spot.x, y: spot.y, units: 'css' };
+      if (params.action === 'type') { await fullCommand(tab, 'input', { ...params, action: 'click' }); params = { ...params, x: undefined, y: undefined }; }
+    }
     if (!(method === 'input' && ['click', 'double_click', 'right_click', 'move', 'drag'].includes(params.action))) await presence(tab.id, 'note', { method, shared: !records[tab.id].created });
     if (method === 'input') watchDownloads(sessionId);
     return fullCommand(tab, method, params);

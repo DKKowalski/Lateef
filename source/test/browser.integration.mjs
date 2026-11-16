@@ -38,7 +38,7 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
     if (req.url === '/file') { res.writeHead(200, { 'content-type': 'text/plain', 'content-disposition': 'attachment; filename="lateef-fixture.txt"' }); res.end('downloaded by the fixture'); return; }
     res.writeHead(200, { 'content-type': 'text/html' });
     if (req.url === '/ping') { res.end('pong'); return; }
-    if (req.url === '/full') { res.end('<!doctype html><title>Full control fixture</title><button id="real" style="width:200px;height:60px" onclick="document.getElementById(\'out\').textContent=event.isTrusted?\'Trusted click\':\'Scripted click\'">Real click target</button><input id="typed" aria-label="Typed" onkeydown="if(event.key===\'Enter\'&&event.isTrusted)document.getElementById(\'out\').textContent=\'Typed: \'+this.value"><a href="/file" download>Get the file</a><p id="out">Idle</p>'); return; }
+    if (req.url === '/full') { res.end('<!doctype html><title>Full control fixture</title><button id="real" style="width:200px;height:60px" onclick="document.getElementById(\'out\').textContent=event.isTrusted?\'Trusted click\':\'Scripted click\'">Real click target</button><input id="typed" aria-label="Typed" onkeydown="if(event.key===\'Enter\'&&event.isTrusted)document.getElementById(\'out\').textContent=\'Typed: \'+this.value"><a href="/file" download>Get the file</a><p id="out">Idle</p><textarea id="note" aria-label="Note"></textarea><div id="pick" contenteditable="true" aria-label="Selectable">select me</div>'); return; }
     if (req.url === '/inner') { res.end('<!doctype html><title>Inner frame</title><label>Framed value<input id="inner"></label><button onclick="document.getElementById(\'said\').textContent=\'Frame got: \'+document.getElementById(\'inner\').value">Send in frame</button><p id="said">Frame idle</p>'); return; }
     if (req.url === '/tools') {
       res.end('<!doctype html><title>Page tools fixture</title><main><h1>Tools fixture</h1><p>Readable paragraph for the text tool.</p><form onsubmit="event.preventDefault();document.getElementById(\'out\').textContent=\'Submitted: \'+this.q.value"><label>Query<input name="q"></label></form><button id="menu" onmouseover="document.getElementById(\'out\').textContent=\'Menu open\'">Hover menu</button><button onclick="setTimeout(()=>document.getElementById(\'out\').textContent=\'Late content\',700)">Load late</button><p id="out">Idle</p><div style="height:3000px"></div><p>Bottom marker</p></main><iframe src="/inner" title="Embedded" width="400" height="120"></iframe>');
@@ -59,6 +59,8 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
         + '</main><div role="dialog" aria-modal="true" aria-label="Letter preview" style="position:fixed;inset:0;background:#fff"><p>Letter page one</p><p>Letter page two</p></div><iframe src="/payments" title="Payments" width="300" height="60"></iframe>');
       return;
     }
+    // Field test 16 Nov 2026: a control that acts on mousedown (Slack's sidebar), and a checkbox past the snapshot limit.
+    if (req.url === '/long') { res.end('<!doctype html><title>Long page</title><div role="treeitem" tabindex="0" onmousedown="document.getElementById(\'said\').textContent=\'Opened by mousedown\'">Open channel</div><p id="said">Closed</p>' + '<button>Filler</button>'.repeat(400) + '<label><input type="checkbox">Also send to channel</label>'); return; }
     if (req.url === '/deep') {
       res.end('<!doctype html><title>Deep inbox fixture</title><main>' + '<div>'.repeat(45) + '<div style="display:contents"><div role="grid"><div role="row"><div role="gridcell"><span>Request for a reference</span></div><div role="gridcell"><button>Open reference message</button></div></div></div></div>' + '</div>'.repeat(45) + '</main>');
       return;
@@ -207,6 +209,12 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   await call('browser_input', { tabId: roam.tabId, action: 'type', text: 'real keys' });
   await call('browser_input', { tabId: roam.tabId, action: 'key', key: 'Enter' });
   assert.equal((await call('browser_wait', { tabId: roam.tabId, text: 'Typed: real keys' })).met, true);
+  const refs = await call('browser_snapshot', { tabId: roam.tabId });
+  await call('browser_input', { tabId: roam.tabId, action: 'type', ref: refs.nodes.find(n => n.name === 'Note').ref, text: 'line one\nline two' });
+  assert.equal(JSON.parse((await call('browser_evaluate', { tabId: roam.tabId, code: 'document.getElementById("note").value' })).value), 'line one\nline two', 'type by ref focuses the element and turns line breaks into Shift+Enter');
+  await call('browser_input', { tabId: roam.tabId, action: 'click', ref: refs.nodes.find(n => n.name === 'Selectable').ref });
+  await call('browser_input', { tabId: roam.tabId, action: 'key', key: 'Meta+a' });
+  assert.equal(JSON.parse((await call('browser_evaluate', { tabId: roam.tabId, code: 'getSelection().toString()' })).value), 'select me', 'Meta+A selects all');
   assert.equal((await call('browser_evaluate', { tabId: roam.tabId, code: 'console.log("hello from the page"); fetch("/ping").then(r => r.status)' })).value, '200');
   await until(async () => (await call('browser_console', { tabId: roam.tabId, pattern: 'hello from' })).messages.length === 1);
   await until(async () => (await call('browser_network', { tabId: roam.tabId, pattern: '/ping$' })).requests.some(r => r.status === 200));
@@ -235,6 +243,12 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   assert.ok(shallow.truncationReasons.includes('depth'));
   assert.equal(shallow.limits.depth, 1);
   await call('browser_tabs', { action: 'close', tabId: deep.tabId });
+  const long = await call('browser_tabs', { action: 'new', url: fixture + 'long' });
+  const far = (await call('browser_find', { tabId: long.tabId, text: 'Also send' })).matches;
+  assert.equal(far.length, 1, 'find searches past the snapshot node limit');
+  await call('browser_click', { tabId: long.tabId, ref: (await call('browser_find', { tabId: long.tabId, text: 'Open channel' })).matches[0].ref });
+  assert.equal((await call('browser_wait', { tabId: long.tabId, text: 'Opened by mousedown' })).met, true, 'a DOM click includes mousedown');
+  await call('browser_tabs', { action: 'close', tabId: long.tabId });
   const custom = await call('browser_tabs', { action: 'new', url: fixture + 'custom' });
   const radio = (await call('browser_find', { tabId: custom.tabId, query: 'No Option' })).matches[0];
   assert.equal(radio?.role, 'radio', 'a label around a hidden radio is actionable, and find accepts query');

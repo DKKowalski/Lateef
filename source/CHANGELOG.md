@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0-beta.7
+
+Upgrading: as for beta 6, update the companion and the extension together.
+
+Fixes from posting on LinkedIn, X and Slack through Lateef (16 November 2026):
+
+- `browser_click` sends pointer and mouse down/up before the click, so controls that act on mousedown (Slack's sidebar, X's composer buttons) respond.
+- `browser_find` searches the whole page instead of stopping at the snapshot's 300-element limit, so a control near the end of a long page (a thread's "Also send" checkbox) is found.
+- `browser_input` takes `ref` from a snapshot instead of coordinates, aiming at the element itself; `type` with `ref` clicks the element first.
+- `browser_input` type turns line breaks into Shift+Enter, which breaks the line without sending a chat message; `newline: "Enter"` types plain Enter.
+- `browser_input` key: Meta or Control with A, C, X, V, Z run select all, copy, cut, paste and undo, which simulated keys did not do on macOS.
+
 ## 0.2.0-beta.6
 
 Upgrading: close your AI client, run `npx lateef@latest stop`, re-run the install command for your client, run `npx lateef@latest extension` and reload the extension in Chrome. Update both together: a beta 6 extension will not connect to an older companion. A beta 6 companion still accepts older extensions.
