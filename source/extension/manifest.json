@@ -26,7 +26,7 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:* ws://127.0.0.1:*"
   },
-  "version_name": "0.2.0 beta 5",
+  "version_name": "0.2.0 beta 9",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

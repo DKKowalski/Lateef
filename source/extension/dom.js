@@ -3,6 +3,13 @@
 export function domCommand(method, params) {
   try {
   const state = globalThis.__quietChrome ??= { refs: new Map(), counter: 0 };
+  // A form may submit into a named iframe on the page (Slate portals use a hidden one); that stays in this tab.
+  // Only a target that would open or reuse another window is refused.
+  const otherWindow = (form, submitter) => {
+    const target = String(submitter?.getAttribute?.('formtarget') ?? form.getAttribute('target') ?? '').trim();
+    if (!target || ['_self', '_top', '_parent'].includes(target.toLowerCase())) return false;
+    return !document.querySelector(`iframe[name="${CSS.escape(target)}"], frame[name="${CSS.escape(target)}"]`);
+  };
   // Accessible name, in the order a screen reader uses: aria-labelledby, aria-label, <label>, then content.
   const label = el => (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' ').trim() ||
     el.getAttribute('aria-label') ||
@@ -27,6 +34,7 @@ export function domCommand(method, params) {
   const snapshot = () => {
     state.refs.clear(); state.counter = 0;
     const generation = Math.random().toString(36).slice(2, 5).padEnd(3, '0'); // short: every reference is paid for in tokens
+    state.generation = generation;
     const lines = [], nodes = [];
     const max = Math.min(Math.max(params.maxChars || 8000, 500), 20000);
     let length = 0, visited = 0;
@@ -139,7 +147,14 @@ export function domCommand(method, params) {
     return { scrollY: Math.round(page.scrollTop), pageHeight: page.scrollHeight, viewportHeight: innerHeight, atBottom: page.scrollTop + innerHeight >= page.scrollHeight - 2 };
   }
   const el = state.refs.get(params.ref);
-  if (!el || !el.isConnected) throw new Error('STALE_REFERENCE: get a fresh snapshot');
+  if (!el || !el.isConnected) {
+    // Say why, so the agent knows a new snapshot is the fix and not a different selector.
+    const made = /^e([a-z0-9]{3})_\d+$/.exec(String(params.ref || ''))?.[1];
+    if (!made) throw new Error(`STALE_REFERENCE: ${params.ref} is not a reference from browser_snapshot or browser_find`);
+    if (!state.generation) throw new Error(`STALE_REFERENCE: ${params.ref} is from before the page loaded again (navigation or reload); take a new snapshot`);
+    if (made !== state.generation) throw new Error(`STALE_REFERENCE: ${params.ref} is from an older snapshot; a newer snapshot or find replaced it (current references start e${state.generation}_). Use those or take a new snapshot`);
+    throw new Error(`STALE_REFERENCE: ${params.ref} was removed from the page after the snapshot; take a new snapshot`);
+  }
   if (method === 'scroll') { el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); return { scrolledTo: params.ref, scrollY: Math.round((document.scrollingElement || document.documentElement).scrollTop) }; }
   if ((!visible(el) && !(method === 'upload' && el.matches('input[type=file]'))) || el.disabled) throw new Error('ELEMENT_UNAVAILABLE: element is hidden or disabled');
   if (method === 'locate') {
@@ -192,8 +207,7 @@ export function domCommand(method, params) {
       }
       return openUrl ? { openUrl } : { clicked: params.ref };
     }
-    const formTarget = el.form?.target;
-    if (formTarget && !['_self', '_top', '_parent'].includes(formTarget.toLowerCase())) throw new Error('NEW_WINDOW_FORM: submitting into another window is unsupported');
+    if (el.form && el.matches('button:not([type]), button[type=submit], input[type=submit], input[type=image]') && otherWindow(el.form, el)) throw new Error('NEW_WINDOW_FORM: this form submits into another window or tab, which is unsupported');
     // Many apps act on pointerdown or mousedown, not click (Slack's sidebar, X's composer buttons), so send the whole
     // press as a person's click would: over, down, up, then click. These are still DOM events, not trusted input.
     // A real click lands on the innermost element under the pointer, and apps often listen there (a label or link inside a
@@ -224,7 +238,7 @@ export function domCommand(method, params) {
     if (allowed && (key.length === 1 || key === 'Enter')) el.dispatchEvent(new KeyboardEvent('keypress', init));
     let submitted = false;
     if (allowed && key === 'Enter' && el.matches('input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio])') && el.form) {
-      if (el.form.target && !['_self', '_top', '_parent'].includes(el.form.target.toLowerCase())) throw new Error('NEW_WINDOW_FORM: submitting into another window is unsupported');
+      if (otherWindow(el.form)) throw new Error('NEW_WINDOW_FORM: this form submits into another window or tab, which is unsupported');
       el.form.requestSubmit(); submitted = true;
     }
     el.dispatchEvent(new KeyboardEvent('keyup', init));

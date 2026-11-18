@@ -132,3 +132,15 @@ test('broker and extension prove the pairing to each other without sending the t
   const closed = once(bad, 'close'); bad.send(JSON.stringify({ type: 'auth', proof: 'f'.repeat(64) }));
   assert.equal((await closed)[0], 1008);
 });
+test('a session whose client stops renewing its lease ends; clients without a lease are kept', async t => {
+  const { broker } = await fixture(t, { lease: 200 });
+  const state = { port: broker.port, adminToken: broker.state.adminToken };
+  const leased = await request(state, '/sessions', { name: 'leased', lease: true }), legacy = await request(state, '/sessions', { name: 'legacy' });
+  assert.equal(leased.leaseMs, 200);
+  for (let i = 0; i < 4; i++) { await new Promise(resolve => setTimeout(resolve, 100)); await request(state, '/sessions/alive', { sessionId: leased.sessionId }); }
+  assert.ok(broker.sessions.has(leased.sessionId), 'renewing keeps it');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(broker.sessions.has(leased.sessionId), false, 'a silent client is expired');
+  assert.ok(broker.sessions.has(legacy.sessionId), 'older clients never renew, so they are never expired');
+  await assert.rejects(request(state, '/sessions/alive', { sessionId: leased.sessionId }), { code: 'UNKNOWN_SESSION' });
+});

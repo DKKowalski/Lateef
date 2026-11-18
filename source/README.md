@@ -4,7 +4,7 @@
 
 An independent MIT-licensed Chrome extension and local MCP companion for AI agents. Use an existing signed-in Chrome profile, an explicitly chosen window, and inactive agent tabs. No Claude executable, provider account, screenshots, desktop-control tools or debugger permission are required by the runtime.
 
-**0.2.0-beta.5 — developer beta.** The companion is on npm as `lateef`. The extension is loaded unpacked because it is not on the Chrome Web Store. macOS has everyday use; Linux and Windows pass the automated tests.
+**0.2.0-beta.9 — developer beta.** The companion is on npm as `lateef`. The extension is loaded unpacked because it is not on the Chrome Web Store. macOS has everyday use; Linux and Windows pass the automated tests.
 
 ## Install
 
@@ -16,6 +16,8 @@ Requires Node.js 22+, Chrome, and an MCP-compatible client.
 4. Start a new session in your client and run `npx lateef doctor`. Confirm that `browser_status` returns the expected browser and current capabilities.
 
 `npm install -g lateef` gives you the plain `lateef` command. To work from source instead, download the source release, run `npm ci`, and use `node bin/lateef.mjs` wherever these steps say `npx lateef`. Install only the package named exactly `lateef`; do not run a similarly named package.
+
+Lateef is not tied to one AI subscription. Each client, and each Claude Code account (every `CLAUDE_CONFIG_DIR`), keeps its own list of tools, so run `lateef install` once in each. They all share the same paired Chrome. Register Lateef natively like this rather than through a hand-made stdio-to-HTTP bridge: a bridge started as a background task can be killed by the client's time limits, and it doesn't renew the session lease, so its tabs end up orphaned. If a session was started before Lateef was installed, start a new one.
 
 Keep the extension folder in place. The store edition is not yet available. Clients need both the local companion and extension: installing the extension alone does not configure the AI client.
 

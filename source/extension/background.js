@@ -43,6 +43,7 @@ async function loaded(tabId) {
   const end = Date.now() + 10000;
   while (Date.now() < end) {
     const tab = await chrome.tabs.get(tabId);
+    if (full.dialogs.has(tabId)) return { ...metadata(tab), loading: tab.status !== 'complete', ...dialogNote(tabId) };
     if (tab.status === 'complete') return { ...metadata(tab), loading: false };
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -57,6 +58,7 @@ async function selectedWindow() {
 }
 async function owned(sessionId, tabId) {
   const records = await ownership(), record = records[tabId];
+  if (record?.orphaned) fail('TAB_ORPHANED', 'A session that has ended opened this tab. Take it over with browser_tabs action:"adopt" first.');
   if (!record || record.sessionId !== sessionId) fail('TAB_NOT_SHARED', 'This tab does not belong to this session.');
   const window = await selectedWindow();
   const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -83,7 +85,20 @@ async function listDownloads(sessionId) {
 
 // Full control: screenshots, real input, scripts and logs through Chrome's debugger. Only the full control build has the
 // permission, the person must switch it on in the popup, and it attaches to a tab only when a tool first needs it.
-const full = { attached: new Set(), logs: new Map(), requests: new Map(), scale: new Map() };
+const full = { attached: new Set(), logs: new Map(), requests: new Map(), scale: new Map(), dialogs: new Map() };
+// A JavaScript dialog (alert, confirm, prompt, or "Leave site?" from beforeunload) freezes the page until answered,
+// so every call is told about it instead of hanging. Only tabs Lateef's debugger is attached to report them.
+const dialogNote = tabId => {
+  const open = full.dialogs.get(tabId);
+  return open ? { dialog: open, next: open.type === 'beforeunload'
+    ? 'The page asks before leaving because of unsaved changes. browser_dialog action:"dismiss" stays and keeps them; "accept" leaves and discards them.'
+    : 'Answer it with browser_dialog action:"accept" or "dismiss" before anything else.' } : {};
+};
+// Closing a tab can wait on a "Leave site?" dialog; this gives up waiting rather than holding every other command.
+async function closeTab(tabId) {
+  await Promise.race([chrome.tabs.remove(tabId).catch(() => {}), new Promise(resolve => setTimeout(resolve, 2500))]);
+  return !(await chrome.tabs.get(tabId).catch(() => null));
+}
 async function fullState() { return { available: !!chrome.debugger, on: !!chrome.debugger && (await chrome.storage.local.get('fullControl')).fullControl === true }; }
 async function attach(tabId) {
   const state = await fullState();
@@ -92,15 +107,19 @@ async function attach(tabId) {
   if (full.attached.has(tabId)) return;
   try { await chrome.debugger.attach({ tabId }, '1.3'); } catch (error) { if (!/already attached/i.test(error.message)) fail('DEBUGGER_BUSY', 'Chrome could not attach to this tab: ' + error.message); }
   full.attached.add(tabId); full.logs.set(tabId, []); full.requests.set(tabId, []);
-  for (const domain of ['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable']) await chrome.debugger.sendCommand({ tabId }, domain).catch(() => {});
+  // Page.enable never answers while a dialog that opened before attaching is showing, so none of these may wait long.
+  const settle = request => Promise.race([request.catch(() => {}), new Promise(resolve => setTimeout(resolve, 2000))]);
+  for (const domain of ['Runtime.enable', 'Log.enable', 'Network.enable', 'Page.enable']) await settle(chrome.debugger.sendCommand({ tabId }, domain));
   // Lets a background tab behave as if focused, so typing and focus-dependent widgets work without activating it.
   await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
 }
-async function detach(tabId) { if (!full.attached.delete(tabId)) return; full.logs.delete(tabId); full.requests.delete(tabId); full.scale.delete(tabId); await chrome.debugger?.detach({ tabId }).catch(() => {}); }
+async function detach(tabId) { if (!full.attached.delete(tabId)) return; full.dialogs.delete(tabId); full.logs.delete(tabId); full.requests.delete(tabId); full.scale.delete(tabId); await chrome.debugger?.detach({ tabId }).catch(() => {}); }
 const cdp = (tabId, method, params) => Promise.race([chrome.debugger.sendCommand({ tabId }, method, params), new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error(`Chrome did not answer ${method} in time.`), { code: 'CDP_TIMEOUT' })), 10000))]);
 const keep = (list, entry) => { list.push(entry); if (list.length > 300) list.shift(); };
 chrome.debugger?.onEvent.addListener((source, method, params) => {
   const logs = full.logs.get(source.tabId), requests = full.requests.get(source.tabId); if (!logs) return;
+  if (method === 'Page.javascriptDialogOpening') { full.dialogs.set(source.tabId, { type: params.type, message: String(params.message || '').slice(0, 500), ...(params.type === 'prompt' ? { defaultPrompt: String(params.defaultPrompt || '').slice(0, 200) } : {}) }); return; }
+  if (method === 'Page.javascriptDialogClosed') { full.dialogs.delete(source.tabId); return; }
   if (method === 'Runtime.consoleAPICalled') keep(logs, { level: params.type, text: params.args.map(arg => arg.value !== undefined ? String(arg.value) : arg.description || arg.type).join(' ').slice(0, 1000) });
   else if (method === 'Runtime.exceptionThrown') keep(logs, { level: 'exception', text: String(params.exceptionDetails.exception?.description || params.exceptionDetails.text).slice(0, 1000) });
   else if (method === 'Log.entryAdded') keep(logs, { level: params.entry.level, text: String(params.entry.text).slice(0, 1000), ...(params.entry.url ? { url: params.entry.url } : {}) });
@@ -108,7 +127,7 @@ chrome.debugger?.onEvent.addListener((source, method, params) => {
   else if (method === 'Network.responseReceived') { const entry = requests.findLast(r => r.id === params.requestId); if (entry) { entry.status = params.response.status; entry.mime = params.response.mimeType; } }
   else if (method === 'Network.loadingFailed') { const entry = requests.findLast(r => r.id === params.requestId); if (entry) entry.failed = params.errorText; }
 });
-chrome.debugger?.onDetach.addListener(source => { full.attached.delete(source.tabId); full.logs.delete(source.tabId); full.requests.delete(source.tabId); });
+chrome.debugger?.onDetach.addListener(source => { full.attached.delete(source.tabId); full.dialogs.delete(source.tabId); full.logs.delete(source.tabId); full.requests.delete(source.tabId); });
 const KEYS = { Enter: [13, '\r'], Tab: [9], Escape: [27], Backspace: [8], Delete: [46], ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39], Home: [36], End: [35], PageUp: [33], PageDown: [34], ' ': [32, ' '] };
 async function fullCommand(tab, method, params) {
   const tabId = tab.id;
@@ -237,8 +256,8 @@ async function dispatch(sessionId, method, params) {
   const records = await ownership();
   if (method === 'session.close') {
     for (const [id, record] of Object.entries(records)) if (record.sessionId === sessionId) {
-      await detach(Number(id));
-      if (record.created) await chrome.tabs.remove(Number(id)).catch(() => {}); else await presence(Number(id), 'remove');
+      if (record.created && !(await closeTab(Number(id)))) { records[id] = { sessionId: null, created: true, orphaned: Date.now() }; continue; } // kept: it holds unsaved changes
+      await detach(Number(id)); if (!record.created) await presence(Number(id), 'remove');
       delete records[id];
     }
     const kept = (await chrome.storage.session.get('downloads')).downloads || {}; if (kept[sessionId]) { delete kept[sessionId]; await chrome.storage.session.set({ downloads: kept }); }
@@ -254,15 +273,45 @@ async function dispatch(sessionId, method, params) {
       records[tab.id] = { sessionId, created: true }; await saveOwnership(records); await group(tab); return params.url ? loaded(tab.id) : metadata(tab);
     }
     if (params.action === 'close') {
+      // Closing twice is fine: a tab that no longer exists reports closed, so a retry after a lost reply is safe.
+      if (!(await chrome.tabs.get(params.tabId).catch(() => null))) { if (records[params.tabId]) { delete records[params.tabId]; await saveOwnership(records); } return { closed: params.tabId, alreadyClosed: true }; }
       await owned(sessionId, params.tabId);
       if (!records[params.tabId]?.created) fail('NOT_OWNED', 'Shared user tabs are detached on session close, never closed by the agent.');
-      await chrome.tabs.remove(params.tabId); delete records[params.tabId]; await saveOwnership(records); return { closed: params.tabId };
+      if (await closeTab(params.tabId)) { delete records[params.tabId]; await saveOwnership(records); return { closed: params.tabId }; }
+      return { closed: false, tabId: params.tabId, ...(full.dialogs.has(params.tabId) ? dialogNote(params.tabId) : { next: 'The page did not close; it is probably asking before leaving because of unsaved changes.' }) };
     }
-    if (params.action !== 'list') fail('BAD_ACTION', 'Use list, new, or close.');
-    const tabs = await chrome.tabs.query({ windowId: window.id });
-    return { tabs: tabs.filter(tab => records[tab.id]?.sessionId === sessionId).map(metadata) };
+    if (params.action === 'adopt') {
+      // Tabs left by a session that ended without closing them (its process was killed, or a tab kept unsaved changes).
+      if (!records[params.tabId]?.orphaned) fail('NOT_ORPHANED', 'Only tabs listed under orphaned can be adopted.');
+      const tab = await chrome.tabs.get(params.tabId).catch(() => null);
+      if (!tab || tab.windowId !== window.id) { delete records[params.tabId]; await saveOwnership(records); fail('TAB_CLOSED', 'That tab is gone.'); }
+      records[params.tabId] = { sessionId, created: true }; await saveOwnership(records); return { adopted: params.tabId, ...metadata(tab), ...dialogNote(tab.id) };
+    }
+    if (params.action !== 'list') fail('BAD_ACTION', 'Use list, new, close or adopt.');
+    const tabs = await chrome.tabs.query({ windowId: window.id }), orphaned = tabs.filter(tab => records[tab.id]?.orphaned).map(metadata);
+    return { tabs: tabs.filter(tab => records[tab.id]?.sessionId === sessionId).map(metadata), ...(orphaned.length ? { orphaned, note: 'Opened by a session that has ended. browser_tabs action:"adopt" takes one over.' } : {}) };
   }
   const tab = await owned(sessionId, params.tabId);
+  if (method === 'dialog') {
+    await attach(tab.id);
+    if (!full.dialogs.has(tab.id)) await new Promise(resolve => setTimeout(resolve, 300)); // a dialog already open is reported on attach
+    const open = full.dialogs.get(tab.id), action = params.action || 'status';
+    if (!open) {
+      // A dialog that opened before Lateef attached cannot be seen or answered, but it freezes the page, which can be.
+      const answered = await Promise.race([chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: () => true }).then(() => true, () => true), new Promise(resolve => setTimeout(() => resolve(false), 1500))]);
+      if (!answered) return { tabId: tab.id, dialog: null, frozen: true, next: 'The page is frozen, probably by a dialog that opened before full control attached. Ask the person to switch to the tab and answer it.' };
+    }
+    if (action === 'status') return { tabId: tab.id, dialog: open || null };
+    if (!['accept', 'dismiss'].includes(action)) fail('BAD_ACTION', 'Use status, accept or dismiss.');
+    if (!open) fail('NO_DIALOG', 'No dialog is open on this tab.');
+    await cdp(tab.id, 'Page.handleJavaScriptDialog', { accept: action === 'accept', ...(open.type === 'prompt' && params.promptText !== undefined ? { promptText: String(params.promptText) } : {}) });
+    full.dialogs.delete(tab.id);
+    // Leaving after "Leave site?" either closes the tab (a close was waiting) or carries on with the navigation.
+    await new Promise(resolve => setTimeout(resolve, 300));
+    if (!(await chrome.tabs.get(tab.id).catch(() => null))) { delete records[tab.id]; await saveOwnership(records); return { handled: action, dialog: open, closed: tab.id }; }
+    return { handled: action, dialog: open, ...(await loaded(tab.id)) };
+  }
+  if (full.dialogs.has(tab.id)) fail('DIALOG_OPEN', `The page is showing a ${full.dialogs.get(tab.id).type} dialog${full.dialogs.get(tab.id).message ? ': ' + JSON.stringify(full.dialogs.get(tab.id).message) : ''}. ${dialogNote(tab.id).next}`);
   if (method === 'history') {
     if (!['back', 'forward', 'reload'].includes(params.action)) fail('BAD_ACTION', 'Use back, forward or reload.');
     watchDownloads(sessionId);
@@ -296,7 +345,10 @@ async function dispatch(sessionId, method, params) {
   if (method === 'navigate') {
     watchDownloads(sessionId);
     if (!urlAllowed(params.url)) fail('URL_BLOCKED', 'Use an http(s) URL.');
+    const before = tab.url;
     await chrome.tabs.update(tab.id, { url: params.url }); // Never changes active/focused.
+    // A "Leave site?" dialog holds the old page with its status complete, so wait briefly for the load to start or a dialog.
+    for (let end = Date.now() + 1500; Date.now() < end && !full.dialogs.has(tab.id);) { const now = await chrome.tabs.get(tab.id); if (now.status === 'loading' || now.url !== before) break; await new Promise(resolve => setTimeout(resolve, 50)); }
     return loaded(tab.id);
   }
   if (!urlAllowed(tab.url)) fail('URL_BLOCKED', 'DOM tools operate on http(s) pages only.');
@@ -360,9 +412,12 @@ async function connect() {
         enqueue(async () => {
           const records = await ownership(), active = new Set(sessions.map(session => session.id));
           let changed = false;
-          for (const [id, record] of Object.entries(records)) if (!active.has(record.sessionId)) {
-            if (record.created) await chrome.tabs.remove(Number(id)).catch(() => {}); else await presence(Number(id), 'remove');
-            delete records[id]; changed = true;
+          // A session that disappears without closing (its process was killed, or the companion restarted) may have
+          // been in the middle of work, so the tabs it opened stay open as orphans for the next session to adopt.
+          for (const [id, record] of Object.entries(records)) if (!record.orphaned && !active.has(record.sessionId)) {
+            if (record.created) records[id] = { sessionId: null, created: true, orphaned: Date.now() };
+            else { await presence(Number(id), 'remove'); delete records[id]; }
+            changed = true;
           }
           if (changed) await saveOwnership(records);
         }); return;
@@ -372,7 +427,9 @@ async function connect() {
       enqueue(async () => {
         try {
           if (Number.isFinite(msg.deadline) && Date.now() > msg.deadline) fail('TIMEOUT', 'Command expired in the extension queue before it started; it was not run.');
-          const result = await dispatch(msg.sessionId, msg.method, msg.params || {});
+          // A page frozen by a dialog never answers, so give up at the deadline and let the queue move on.
+          const left = Number.isFinite(msg.deadline) ? msg.deadline - Date.now() - 500 : 20000;
+          const result = await Promise.race([dispatch(msg.sessionId, msg.method, msg.params || {}), new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('The page did not answer in time. It may be showing a dialog; check with browser_dialog. The action may have run.'), { code: 'TIMEOUT' })), Math.max(left, 1000)))]);
           if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'result', id: msg.id, ok: true, result }));
         } catch (error) {
           if (connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({ type: 'result', id: msg.id, ok: false, error: { code: error.code || 'BROWSER_ERROR', message: error.message } }));
@@ -451,7 +508,7 @@ chrome.runtime.onStartup.addListener(connect);
 // A navigation or reload wipes the page, and the marker with it; put it back once the new document is ready.
 chrome.tabs.onUpdated.addListener((id, change) => { if (change.status === 'complete') ownership().then(records => { if (records[id]) presence(id, 'show', { shared: !records[id].created }); }).catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => ownership().then(badge).catch(() => {}));
-chrome.tabs.onRemoved.addListener(id => { full.attached.delete(id); full.logs.delete(id); full.requests.delete(id); });
+chrome.tabs.onRemoved.addListener(id => { full.attached.delete(id); full.dialogs.delete(id); full.logs.delete(id); full.requests.delete(id); });
 chrome.tabs.onRemoved.addListener(id => enqueue(async () => { const records = await ownership(); if (records[id]) { delete records[id]; await saveOwnership(records); } }));
 // Do not hold service-worker module evaluation open on Chrome API callbacks.
 void connect();

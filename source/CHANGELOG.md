@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0-beta.9
+
+Upgrading: update the companion and the extension together, then reload the extension.
+
+Fixes from filling in a Slate application portal through Lateef (17 November 2026):
+
+- `browser_dialog` (full control) reports and answers JavaScript dialogs: alert, confirm, prompt and "Leave site?". While one is open, other calls on that tab fail at once with `DIALOG_OPEN` instead of hanging, and `browser_navigate` reports the dialog. Dismissing "Leave site?" keeps the unsaved changes.
+- `browser_tabs` close no longer hangs on a page that asks before leaving. It answers `closed:false` with the dialog. Closing a tab that is already gone answers `alreadyClosed`, so a retry is safe.
+- A command the page never answers gives up at its deadline, so one frozen tab no longer holds up every other command.
+- Sessions renew a lease. When a client is killed without closing, its session ends within a minute. Tabs it opened stay open as orphans, which `browser_tabs` list shows and `action:"adopt"` takes over, instead of belonging to no one. When a client closes normally, its tabs still close. If a tab refuses to close because of unsaved changes, it stays open as an orphan.
+- A form that submits into a named iframe on the page (Slate's `fw_lazy_commit`) can be clicked; only forms that would open another window are refused. Clicking a checkbox or field inside such a form is never treated as a submission.
+- A stale reference says why it is stale: it comes from an older snapshot, the page has loaded again since, or the element was removed.
+- The README recommends registering Lateef with `lateef install` rather than through an ad-hoc bridge, and notes that each Claude account needs its own registration.
+
 ## 0.2.0-beta.8
 
 - `browser_click` starts its events at the innermost element under the reference's centre, as a real click does, so apps that listen on an inner element (Slack's sidebar rows) respond.

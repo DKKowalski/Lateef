@@ -1,6 +1,6 @@
 {
   "name": "lateef",
-  "version": "0.2.0-beta.5",
+  "version": "0.2.0-beta.9",
   "description": "Model-independent MCP tools for background tabs in your existing Chrome window",
   "type": "module",
   "license": "MIT",

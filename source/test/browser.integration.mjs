@@ -17,7 +17,7 @@ const parse = result => JSON.parse(result.content[0].text);
 test('real unpacked extension: background DOM workflow, MCP stdio, isolation and closed-window refusal', { timeout: 60000 }, async t => {
   await mkdir('artifacts', { recursive: true });
   const directory = await mkdtemp(join(tmpdir(), 'lateef-browser-'));
-  const broker = await Broker.create(join(directory, 'state'), { port: 0 }); await broker.start();
+  const broker = await Broker.create(join(directory, 'state'), { port: 0, lease: 1500 }); await broker.start();
   let context, http, client, second;
   const uploaded = [];
   t.after(async () => { await client?.close(); await second?.close(); await context?.close(); await broker.stop(); if (http) await new Promise(resolve => http.close(resolve)); await rm(directory, { recursive: true, force: true }); });
@@ -29,6 +29,8 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
     headless: true, executablePath, channel: executablePath ? undefined : 'chromium',
     args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
   });
+  // Playwright answers page dialogs itself unless something listens; a listener that does nothing leaves them to Lateef, as in a person's Chrome.
+  context.on('dialog', () => {});
   const errors = [];
   context.on('weberror', error => errors.push(error.error().message));
   http = createServer((req, res) => {
@@ -38,6 +40,9 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
     if (req.url === '/file') { res.writeHead(200, { 'content-type': 'text/plain', 'content-disposition': 'attachment; filename="lateef-fixture.txt"' }); res.end('downloaded by the fixture'); return; }
     res.writeHead(200, { 'content-type': 'text/html' });
     if (req.url === '/ping') { res.end('pong'); return; }
+    if (req.url === '/slate') { res.end('<!doctype html><title>Slate fixture</title><form id="commit" target="fw_lazy_commit" action="/committed"><input name="answer" aria-label="Answer" value="yes"><button type="submit">Save answers</button></form><iframe name="fw_lazy_commit" title="Commit frame" style="display:none"></iframe><form target="_blank" action="/elsewhere"><input type="checkbox" aria-label="Agree"><button type="submit">Open elsewhere</button></form>'); return; }
+    if (req.url.startsWith('/committed')) { res.end('<!doctype html><title>Committed</title><p>Committed</p>'); return; }
+    if (req.url === '/guard') { res.end('<!doctype html><title>Unsaved fixture</title><input id="draft" aria-label="Draft"><script>addEventListener("beforeunload", e => { if (document.getElementById("draft").value) { e.preventDefault(); e.returnValue = ""; } })</script>'); return; }
     if (req.url === '/full') { res.end('<!doctype html><title>Full control fixture</title><button id="real" style="width:200px;height:60px" onclick="document.getElementById(\'out\').textContent=event.isTrusted?\'Trusted click\':\'Scripted click\'">Real click target</button><input id="typed" aria-label="Typed" onkeydown="if(event.key===\'Enter\'&&event.isTrusted)document.getElementById(\'out\').textContent=\'Typed: \'+this.value"><a href="/file" download>Get the file</a><p id="out">Idle</p><textarea id="note" aria-label="Note"></textarea><div id="pick" contenteditable="true" aria-label="Selectable">select me</div>'); return; }
     if (req.url === '/inner') { res.end('<!doctype html><title>Inner frame</title><label>Framed value<input id="inner"></label><button onclick="document.getElementById(\'said\').textContent=\'Frame got: \'+document.getElementById(\'inner\').value">Send in frame</button><p id="said">Frame idle</p>'); return; }
     if (req.url === '/tools') {
@@ -88,7 +93,7 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   const before = await worker.evaluate(async () => ({ windows: (await chrome.windows.getAll()).map(w => w.id), active: (await chrome.tabs.query({ active: true })).map(tab => tab.id) }));
   const transport = new StdioClientTransport({ command: process.execPath, args: [resolve('bin/lateef.mjs'), 'mcp'], env: { ...process.env, LATEEF_STATE_DIR: join(directory, 'state') } });
   client = new Client({ name: 'browser-test-client', version: '1.0' }); await client.connect(transport);
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 21); assert.equal(tools.tools.some(tool => /claude|playwright/.test(tool.name)), false);
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 22); assert.equal(tools.tools.some(tool => /claude|playwright/.test(tool.name)), false);
   // The test reads structured nodes; clients get plain lines by default, which is checked separately below.
   const call = async (name, args) => { if (name === 'browser_snapshot' || name === 'browser_find') args = { format: 'json', ...args }; const result = await client.callTool({ name, arguments: args }); if (result.isError) throw new Error(result.content[0].text); return parse(result); };
   assert.equal((await call('browser_status', {})).connected, true);
@@ -221,6 +226,19 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   assert.deepEqual(await worker.evaluate(async () => (await chrome.tabs.query({ active: true })).map(t => t.id)), activeBeforeControl, 'full control must not activate a tab');
   const pageError = await client.callTool({ name: 'browser_evaluate', arguments: { tabId: roam.tabId, code: 'nope()' } }); assert.equal(pageError.isError, true); assert.match(pageError.content[0].text, /PAGE_ERROR/);
   await call('browser_tabs', { action: 'close', tabId: roam.tabId });
+  // "Leave site?" dialogs are reported and answered instead of freezing the tab or silently losing the draft.
+  const guard = await call('browser_tabs', { action: 'new', url: fixture + 'guard' });
+  const draft = (await call('browser_snapshot', { tabId: guard.tabId })).nodes.find(n => n.name === 'Draft').ref;
+  await call('browser_input', { tabId: guard.tabId, action: 'type', ref: draft, text: 'unsaved words' }); // real input gives the page the activation it needs to ask
+  const leaving = await call('browser_navigate', { tabId: guard.tabId, url: fixture + 'full' });
+  assert.equal(leaving.dialog?.type, 'beforeunload', JSON.stringify(leaving));
+  const frozen = await client.callTool({ name: 'browser_text', arguments: { tabId: guard.tabId } }); assert.equal(frozen.isError, true); assert.match(frozen.content[0].text, /DIALOG_OPEN/);
+  assert.equal((await call('browser_dialog', { tabId: guard.tabId })).dialog.type, 'beforeunload');
+  const stayed = await call('browser_dialog', { tabId: guard.tabId, action: 'dismiss' }); assert.match(stayed.url, /\/guard$/);
+  assert.equal(JSON.parse((await call('browser_evaluate', { tabId: guard.tabId, code: 'document.getElementById("draft").value' })).value), 'unsaved words', 'dismiss keeps the unsaved draft');
+  const keptOpen = await call("browser_tabs", { action: "close", tabId: guard.tabId }); assert.equal(keptOpen.closed, false); assert.equal(keptOpen.dialog?.type, "beforeunload", JSON.stringify(keptOpen));
+  assert.equal((await call('browser_dialog', { tabId: guard.tabId, action: 'accept' })).closed, guard.tabId);
+  assert.equal((await call('browser_tabs', { action: 'close', tabId: guard.tabId })).alreadyClosed, true, 'closing again is safe');
   const editor = await call('browser_tabs', { action: 'new', url: fixture + 'editor' });
   const editors = (await call('browser_snapshot', { tabId: editor.tabId })).nodes;
   assert.equal((await call('browser_fill', { tabId: editor.tabId, ref: editors.find(n => n.name === 'Rich editor').ref, value: 'Hello from a paste' })).via, 'paste');
@@ -295,6 +313,26 @@ test('real unpacked extension: background DOM workflow, MCP stdio, isolation and
   const closeUserTab = await client.callTool({ name: 'browser_tabs', arguments: { action: 'close', tabId: sentinelId } });
   assert.equal(closeUserTab.isError, true); assert.match(closeUserTab.content[0].text, /NOT_OWNED/);
   await sharing.close();
+  // A form that submits into a named iframe on the page stays in the tab; one that opens another window is refused.
+  const slate = await call('browser_tabs', { action: 'new', url: fixture + 'slate' });
+  const old = await call('browser_snapshot', { tabId: slate.tabId }), slateNodes = (await call('browser_snapshot', { tabId: slate.tabId })).nodes;
+  const staleClick = await client.callTool({ name: 'browser_click', arguments: { tabId: slate.tabId, ref: old.nodes.find(n => n.name === 'Save answers').ref } });
+  assert.match(staleClick.content[0].text, /older snapshot/, 'a reference from an earlier snapshot says so');
+  await call('browser_click', { tabId: slate.tabId, ref: slateNodes.find(n => n.name === 'Agree').ref }); // a checkbox in such a form is not a submission
+  const elsewhere = await client.callTool({ name: 'browser_click', arguments: { tabId: slate.tabId, ref: slateNodes.find(n => n.name === 'Open elsewhere').ref } });
+  assert.match(elsewhere.content[0].text, /NEW_WINDOW_FORM/);
+  await call('browser_click', { tabId: slate.tabId, ref: slateNodes.find(n => n.name === 'Save answers').ref });
+  assert.equal((await call('browser_wait', { tabId: slate.tabId, text: 'Committed' })).met, true, 'the form submitted into its hidden iframe');
+  await call('browser_tabs', { action: 'close', tabId: slate.tabId });
+  // A client killed mid-task leaves its tabs open for another session to adopt, instead of owned by nobody.
+  const doomedTransport = new StdioClientTransport({ command: process.execPath, args: [resolve('bin/lateef.mjs'), 'mcp'], env: { ...process.env, LATEEF_STATE_DIR: join(directory, 'state') } });
+  const doomed = new Client({ name: 'doomed-client', version: '1.0' }); await doomed.connect(doomedTransport);
+  const left = parse(await doomed.callTool({ name: 'browser_tabs', arguments: { action: 'new', url: fixture + 'sentinel' } }));
+  process.kill(doomedTransport.pid, 'SIGKILL');
+  await until(async () => (await call('browser_tabs', { action: 'list' })).orphaned?.some(t => t.tabId === left.tabId));
+  assert.equal((await call('browser_tabs', { action: 'adopt', tabId: left.tabId })).adopted, left.tabId);
+  assert.ok((await call('browser_tabs', { action: 'list' })).tabs.some(t => t.tabId === left.tabId));
+  await call('browser_tabs', { action: 'close', tabId: left.tabId });
   await call('browser_tabs', { action: 'close', tabId: tab.tabId });
   await client.close(); client = null;
   await until(() => !broker.sessions.has(activeSession.id));

@@ -21,7 +21,7 @@ test('fresh MCP process starts its own broker automatically without a browser or
     await rm(directory, { recursive: true, force: true });
   });
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('bin/lateef.mjs'), 'mcp'], env: { ...process.env, LATEEF_STATE_DIR: directory } }));
-  const tools = await client.listTools(); assert.equal(tools.tools.length, 21);
+  const tools = await client.listTools(); assert.equal(tools.tools.length, 22);
   const status = await client.callTool({ name: 'browser_status', arguments: {} });
   assert.equal(JSON.parse(status.content[0].text).connected, false);
   const action = await client.callTool({ name: 'browser_tabs', arguments: { action: 'new', url: 'https://example.invalid/' } });

@@ -15,6 +15,9 @@ export class Broker {
     this.storage = storage; this.state = storage.state;
     this.port = options.port ?? this.state.port;
     this.timeout = options.timeout ?? 20000;
+    // A client that says it keeps a lease (beta.9+) and stops renewing it has died without closing (killed, crashed).
+    // Its session ends so its tabs stop being tied to nobody; older clients without a lease are never expired.
+    this.lease = options.lease ?? 60000;
     this.sessions = new Map(); this.pending = new Map(); this.extensions = new Map();
     this.pairing = null;
     this.http = createServer((req, res) => this.handle(req, res));
@@ -78,12 +81,18 @@ export class Broker {
       if (req.method === 'GET' && req.url === '/status') return this.json(res, 200, this.status());
       if (req.method === 'POST' && req.url === '/sessions') {
         const body = await this.body(req), id = randomUUID();
-        this.sessions.set(id, { id, name: String(body.name || 'MCP client').slice(0, 80), pairId: null });
-        this.broadcastSessions(); return this.json(res, 200, { sessionId: id });
+        this.sessions.set(id, { id, name: String(body.name || 'MCP client').slice(0, 80), pairId: null, lease: body.lease === true, seen: Date.now() });
+        this.broadcastSessions(); return this.json(res, 200, { sessionId: id, ...(body.lease === true ? { leaseMs: this.lease } : {}) });
+      }
+      if (req.method === 'POST' && req.url === '/sessions/alive') {
+        const session = this.sessions.get((await this.body(req)).sessionId);
+        if (!session) return this.json(res, 404, { error: 'Unknown session', code: 'UNKNOWN_SESSION' });
+        session.seen = Date.now(); return this.json(res, 200, { alive: true });
       }
       if (req.method === 'POST' && req.url === '/rpc') {
         const body = await this.body(req), session = this.sessions.get(body.sessionId);
-        if (!session) return this.json(res, 404, { error: 'Unknown session' });
+        if (!session) return this.json(res, 404, { error: 'Unknown session', code: 'UNKNOWN_SESSION' });
+        session.seen = Date.now();
         if (body.method === 'status') return this.json(res, 200, this.status());
         if (body.method === 'session.close' && !session.pairId) { this.sessions.delete(session.id); this.broadcastSessions(); return this.json(res, 200, { closed: true }); }
         if (body.method === 'session.close' && !this.extensions.has(session.pairId)) { this.sessions.delete(session.id); this.broadcastSessions(); return this.json(res, 200, { closed: true, cleanupPending: true }); }
@@ -170,16 +179,24 @@ export class Broker {
     const id = randomUUID();
     return new Promise(resolve => {
       const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: { code: 'TIMEOUT', message: 'Browser did not answer. The action may have run; inspect state before retrying.' } }); }, this.timeout);
-      this.pending.set(id, { resolve, timer, socket: extension.socket });
+      this.pending.set(id, { resolve, timer, socket: extension.socket, sessionId });
       extension.socket.send(JSON.stringify({ type: 'command', id, sessionId, method, params, deadline: Date.now() + this.timeout }));
     });
   }
   async start() {
     await new Promise((resolve, reject) => { this.http.once('error', reject); this.http.listen(this.port, '127.0.0.1', resolve); });
     this.port = this.http.address().port;
-    this.state.port = this.port; await this.storage.save(); return this;
+    this.state.port = this.port; await this.storage.save();
+    this.sweeper = setInterval(() => this.expire(), Math.max(Math.round(this.lease / 4), 50)); this.sweeper.unref();
+    return this;
+  }
+  expire(now = Date.now()) {
+    let gone = false;
+    for (const session of this.sessions.values()) if (session.lease && now - session.seen > this.lease && ![...this.pending.values()].some(p => p.sessionId === session.id)) { this.sessions.delete(session.id); gone = true; }
+    if (gone) this.broadcastSessions();
   }
   async stop() {
+    clearInterval(this.sweeper);
     for (const socket of this.ws.clients) socket.terminate();
     this.ws.close(); await new Promise(resolve => this.http.close(resolve));
   }
